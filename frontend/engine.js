@@ -41,19 +41,43 @@
     if (mode === "live") return LIVE_API;
     return String(backend || "").replace(/\/+$/, "");
   }
-  function isLive() { return CFG.mode === "live"; }
+  // --- effective connection state -------------------------------------- //
+  // CFG.mode is the user's INTENT ("live" or "mock"). When the live daily limit
+  // is hit we do NOT change the intent — we set DEGRADED and transparently serve
+  // from the mock, while re-probing the real API on each message so we can offer
+  // to reconnect once the limit resets. A pure "mock" intent never degrades or
+  // probes (there's no key, and nothing to fall back from).
+  var DEGRADED = false;        // live intended, but currently serving from mock
+  var PROBE_DISMISSED = false; // user chose to stay on mock for this session
+  var RESET_PENDING = false;   // a live-reset prompt is already showing
+  function liveIntended() { return CFG.mode === "live"; }
+  function isLive() { return CFG.mode === "live" && !DEGRADED; }
+  // Where mock calls go: in mock intent that's CFG.base (honours ?api=); in a
+  // degraded live session it's the local mock backend (CFG.backend).
+  function mockBase() { return CFG.mode === "live" ? CFG.backend : CFG.base; }
+  function activeBase() { return isLive() ? LIVE_API : mockBase(); }
+  function activeTok() { return isLive() ? CFG.liveTok : "demo"; }
   function readConfig() {
     var qs = new URLSearchParams(location.search);
     // Deployment config (window.SWIPE_*, set by config.js from a host env var)
     // is authoritative — it represents "always use my key". A query param can
     // still override per-request; localStorage is only a local-session fallback.
     var envTok = window.SWIPE_API_TOKEN || "";
+    var qsTok = qs.get("token") || "";
+    var lsTok = localStorage.getItem("swipe_api_token") || "";
+    // Bias toward LIVE: whenever a real key is on hand we drive the actual Swipe
+    // API — mock is meant to be reached only as the automatic fallback when the
+    // live quota is spent (or as the genuinely key-free local demo). Precedence:
+    // an explicit ?mode= / config.js mode wins; an injected (config.js) or
+    // per-request (?token=) key implies live; then an explicit saved choice;
+    // then any saved key implies live; finally mock when there's no key at all.
     var mode =
       qs.get("mode") ||
       window.SWIPE_MODE ||
-      (envTok ? "live" : "") ||           // an injected key implies live
-      localStorage.getItem("swipe_mode") ||
-      "mock";
+      ((envTok || qsTok) ? "live" : "") ||   // an injected / explicit key implies live
+      localStorage.getItem("swipe_mode") ||  // honour an explicit saved choice
+      (lsTok ? "live" : "") ||               // a saved key → default to live
+      "mock";                                // no key anywhere → key-free mock demo
     var backend =
       window.SWIPE_API_BASE ||
       localStorage.getItem("swipe_backend") ||
@@ -66,11 +90,11 @@
     // mock-only convenience (token is the worthless "demo") for pointing the
     // demo at a self-hosted mock backend.
     var override = mode === "live" ? "" : (qs.get("api") || localStorage.getItem("swipe_api_base"));
-    var tok =
-      qs.get("token") ||
-      envTok ||
-      localStorage.getItem("swipe_api_token") ||
-      (mode === "live" ? "" : "demo");
+    // The real Swipe key — used only for live calls and live-reset probes. We
+    // keep it around even in a degraded session (which actively serves "demo"
+    // against the mock) so we can still poll the real API for a quota reset.
+    var liveTok = qsTok || envTok || lsTok || "";
+    var tok = mode === "live" ? liveTok : "demo";
     var base = override ? override : deriveBase(mode, backend);
     // OpenRouter LLM (the agent's brain). Key/model come from config.js (env)
     // or query params; absent → the deterministic regex NLU is used instead.
@@ -84,7 +108,8 @@
     var sellerState = qs.get("seller_state") || window.SWIPE_SELLER_STATE ||
       (sellerGstin ? CODE_STATE[sellerGstin.slice(0, 2)] : "") || "";
     return {
-      mode: mode, backend: backend.replace(/\/+$/, ""), base: base.replace(/\/+$/, ""), tok: tok,
+      mode: mode, backend: backend.replace(/\/+$/, ""), base: base.replace(/\/+$/, ""),
+      tok: tok, liveTok: liveTok,
       llmKey: llmKey, llmModel: llmModel,
       sellerState: normState(sellerState), sellerGstin: sellerGstin,
     };
@@ -615,30 +640,76 @@
   // the resolved origin here and fail CLOSED if it has somehow drifted, rather
   // than ever attaching the key to an unexpected origin.
   function assertLiveBaseSafe() {
-    if (CFG.mode !== "live") return;
+    if (!isLive()) return;
     try {
-      if (new URL(CFG.base).origin !== new URL(LIVE_API).origin) {
-        throw new Error("Refusing to send the live Swipe key to an unexpected host (" + CFG.base + ").");
+      if (new URL(activeBase()).origin !== new URL(LIVE_API).origin) {
+        throw new Error("Refusing to send the live Swipe key to an unexpected host (" + activeBase() + ").");
       }
     } catch (e) {
-      throw new Error("Invalid live API base: " + CFG.base);
+      throw new Error("Invalid live API base: " + activeBase());
     }
   }
-  function apiCall(method, path, body) {
-    assertLiveBaseSafe();
-    return fetch(CFG.base + path, {
+  // Recognise a "limit exhausted" rejection from the live API so we can degrade
+  // to the mock rather than dead-ending. NOTE: the real Swipe Partner API does
+  // NOT use HTTP 429 for this — it returns HTTP 200 with success=false,
+  // error_code "FORBIDDEN", and message "API Limit Reached. Please write a mail
+  // to api@getswipe.in for additional free credits". So we match on the message
+  // text (and 429, for good measure), not on the status or the generic
+  // FORBIDDEN code (which also covers real permission errors we must NOT mask).
+  function isRateLimit(status, code, message) {
+    // Match the SPECIFIC known signals only — a broad alternation against
+    // free-text server messages risks misclassifying an unrelated error as a
+    // limit (which would wrongly route the call to the mock). HTTP 429, the
+    // real Swipe phrasing ("API Limit Reached … additional free credits"), or
+    // an explicit rate-limit error_code.
+    return status === 429 ||
+      /\bapi limit reached\b|\blimit reached\b|\brate.?limit\b|\btoo many requests\b|\bfree credits\b|RATE_LIMIT|LIMIT_EXCEEDED|USAGE_LIMIT|TOO_MANY_REQUESTS/i
+        .test(String(code) + " " + String(message));
+  }
+  // Low-level call. Targets the active endpoint by default; an explicit base/tok
+  // (used by the live-reset probe) overrides that to hit the real API directly.
+  function rawCall(method, path, body, base, tok) {
+    base = base != null ? base : activeBase();
+    tok = tok != null ? tok : activeTok();
+    return fetch(base + path, {
       method: method,
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + CFG.tok },
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + tok },
       body: body ? JSON.stringify(body) : undefined,
     }).then(function (res) {
       return res.json().catch(function () { return null; }).then(function (data) {
         if (!res.ok || (data && data.success === false)) {
+          var code = (data && data.error_code) || String(res.status);
           var err = new Error((data && data.message) || ("Request failed (" + res.status + ")"));
-          err.code = (data && data.error_code) || String(res.status);
+          err.code = code; err.status = res.status;
+          err.rateLimited = isRateLimit(res.status, code, err.message);
           throw err;
         }
         return data ? data.data : null;
       });
+    });
+  }
+  function apiCall(method, path, body) {
+    var live = isLive();
+    if (live) assertLiveBaseSafe();
+    return rawCall(method, path, body).catch(function (err) {
+      // A live call hit the daily limit → flip to degraded so the header shows
+      // it and subsequent calls use the mock. We do NOT keep the user's intent
+      // a secret, but we DO treat reads and writes differently:
+      if (err && err.rateLimited && live && liveIntended()) {
+        setDegraded(err.message);
+        // Reads degrade transparently — serving the same read from the mock is
+        // harmless and keeps the UI alive.
+        if (String(method).toUpperCase() === "GET") return rawCall(method, path, body);
+        // Writes must NOT silently retry against the mock: creating an invoice /
+        // payment on a throwaway backend while the user believes it hit their
+        // live account is a silent, misleading write (CLAUDE.md non-negotiable).
+        // Surface the limit on THIS attempt; the confirm bar re-arms, and since
+        // we're now degraded the user's re-confirm goes to the mock knowingly.
+        var e2 = new Error("Live Swipe API daily limit reached — switched to the offline mock. Re-confirm to record this on the mock (sample data), or try again once the limit resets.");
+        e2.code = err.code; e2.rateLimited = true;
+        throw e2;
+      }
+      throw err;
     });
   }
   function apiGet(path) { return apiCall("GET", path); }
@@ -767,7 +838,10 @@
     var items = (draft.lines || []).map(function (l) {
       return [l.id, l.name, l.qty, l.rate, l.gst, l.cess, l.discountPercent].join(":");
     }).join("|");
-    return [c.id, draft.dueDays, items].join("~");
+    // Include the effective backend so a draft created on the mock (while
+    // degraded) and the SAME draft later created on live don't collide — else a
+    // resumed-live create would return the stale mock result from the cache.
+    return [isLive() ? "live" : "mock", c.id, draft.dueDays, items].join("~");
   }
   function createInvoice(draft) {
     var fp = draftFingerprint(draft);
@@ -910,7 +984,7 @@
       }
     } else {
       SELLER_ASSUMED = false;
-      company = fetch(CFG.base + "/v2/_mock/company")
+      company = fetch(mockBase() + "/v2/_mock/company")
         .then(function (r) { return r.ok ? r.json() : null; })
         .catch(function () { return null; });
     }
@@ -933,29 +1007,103 @@
       res[3].forEach(function (d) { SEED_DOCS.push(d); });
       Engine.online = true;
       Engine.lastError = null;
+      notifyMode();   // single propagation point for connection state → UI
     }).catch(function (e) {
       Engine.online = false;
       Engine.lastError = (e && e.message) || "Cannot reach the Swipe API.";
+      notifyMode();
     });
   }
   function reconnect() { return boot().then(function () { return Engine.online; }); }
+
+  // Notify the UI of a connection-state change (the React app listens for this
+  // to resync the header pill, the offline state, and the document cache).
+  function notifyMode() {
+    Engine.mode = CFG.mode;
+    Engine.intendedLive = liveIntended();
+    Engine.usingMock = !isLive();
+    Engine.degraded = DEGRADED;
+    Engine.apiBase = activeBase();
+    try {
+      window.dispatchEvent(new CustomEvent("swipe:mode", {
+        detail: {
+          mode: CFG.mode, online: Engine.online,
+          degraded: !!DEGRADED, intendedLive: liveIntended(),
+          reason: Engine.degradedReason || "",
+        },
+      }));
+    } catch (e) { /* CustomEvent unavailable — UI reads Engine flags on next render */ }
+  }
+
+  // Enter degraded mode: live is intended, but the daily limit is spent, so we
+  // transparently serve from the mock. Runtime-only (never persisted) and fully
+  // reversible (resumeLive). The header shows a small "daily limit reached" tag.
+  function setDegraded(reason) {
+    if (DEGRADED) return;
+    DEGRADED = true;
+    Engine.degraded = true;
+    Engine.degradedReason = reason || "Live Swipe API daily limit reached";
+    notifyMode();
+  }
+
+  // Probe the real API (one cheap read) to see whether the daily limit has
+  // reset. Hits the live host directly with the real key, bypassing the degrade
+  // path; resolves true only on a genuine success.
+  function probeLive() {
+    if (!liveIntended() || !DEGRADED || !CFG.liveTok) return Promise.resolve(false);
+    return rawCall("GET", "/v2/customer/list?num_records=1", null, LIVE_API, CFG.liveTok)
+      .then(function () { return true; })
+      .catch(function () { return false; });
+  }
+  // Called by the UI on each new message while degraded: silently re-probe live;
+  // if it's back, raise a one-time "swipe:livereset" prompt and let the user
+  // decide whether to reconnect. No-op once dismissed or while a prompt shows.
+  function maybeProbeLive() {
+    if (!liveIntended() || !DEGRADED || PROBE_DISMISSED || RESET_PENDING) return Promise.resolve(false);
+    return probeLive().then(function (up) {
+      if (up) {
+        RESET_PENDING = true;
+        try { window.dispatchEvent(new CustomEvent("swipe:livereset", { detail: {} })); } catch (e) {}
+      }
+      return up;
+    });
+  }
+  // User accepted the reset: drop back to the real API, fresh.
+  function resumeLive() {
+    DEGRADED = false; PROBE_DISMISSED = false; RESET_PENDING = false;
+    Engine.degraded = false; Engine.degradedReason = null;
+    return boot().then(function () { notifyMode(); return Engine.online; });
+  }
+  // User declined: keep this chat on the mock and stop probing for the session.
+  function stayOnMock() {
+    PROBE_DISMISSED = true; RESET_PENDING = false;
+    notifyMode();
+  }
 
   // Apply new connection settings (from the in-app Connection panel), persist
   // them, then re-boot against the new target. Returns whether we connected.
   function configure(opts) {
     opts = opts || {};
+    // An explicit reconnect clears any prior automatic degrade / probe state.
+    DEGRADED = false; PROBE_DISMISSED = false; RESET_PENDING = false;
+    Engine.degraded = false; Engine.degradedReason = null;
     if (opts.mode != null) { CFG.mode = opts.mode; localStorage.setItem("swipe_mode", opts.mode); }
     if (opts.backend != null) { CFG.backend = String(opts.backend).replace(/\/+$/, ""); localStorage.setItem("swipe_backend", CFG.backend); }
-    if (opts.token != null) { CFG.tok = opts.token; localStorage.setItem("swipe_api_token", opts.token); }
+    if (opts.token != null) {
+      localStorage.setItem("swipe_api_token", opts.token);
+      if (CFG.mode === "live") CFG.liveTok = opts.token;
+    }
     // A saved choice always recomputes the base from (mode, backend), so drop
     // any legacy full-base override that would otherwise pin it.
     localStorage.removeItem("swipe_api_base");
     CFG.base = deriveBase(CFG.mode, CFG.backend);
-    Engine.apiBase = CFG.base; Engine.token = CFG.tok; Engine.mode = CFG.mode; Engine.backend = CFG.backend;
+    CFG.tok = CFG.mode === "live" ? CFG.liveTok : "demo";
+    Engine.token = CFG.tok; Engine.mode = CFG.mode; Engine.backend = CFG.backend;
+    Engine.intendedLive = liveIntended(); Engine.apiBase = activeBase();
     return reconnect();
   }
   function resetBackend() {
-    return fetch(CFG.base + "/v2/_mock/reset", { method: "POST" })
+    return fetch(mockBase() + "/v2/_mock/reset", { method: "POST" })
       .then(function () { return boot(); })
       .then(function () { return SEED_DOCS.slice(); });
   }
@@ -965,6 +1113,8 @@
     // config / status
     apiBase: CFG.base, token: CFG.tok, mode: CFG.mode, backend: CFG.backend,
     online: false, lastError: null, ready: null,
+    intendedLive: CFG.mode === "live", usingMock: CFG.mode !== "live",
+    degraded: false, degradedReason: null,
     // reference data (mutated in place by boot)
     SELLER: SELLER, CUSTOMERS: CUSTOMERS, PRODUCTS: PRODUCTS, SEED_DOCS: SEED_DOCS, TODAY: new Date(),
     // formatting + sanitization
@@ -980,6 +1130,7 @@
     createInvoice: createInvoice, recordPayment: recordPayment, listInvoices: listInvoices,
     refreshDocs: refreshDocs, ledger: ledger, lookupGstin: lookupGstin,
     reconnect: reconnect, resetBackend: resetBackend, configure: configure,
+    maybeProbeLive: maybeProbeLive, resumeLive: resumeLive, stayOnMock: stayOnMock,
   };
   window.SwipeEngine = Engine;
   Engine.ready = boot(); // kick off; resolves whether or not the backend is up

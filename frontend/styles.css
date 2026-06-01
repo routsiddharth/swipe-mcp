@@ -161,6 +161,18 @@ body {
 .btn:disabled { opacity: .55; cursor: default; transform: none; box-shadow: var(--shadow-sm); }
 .pill.live.real { background: var(--peach); }
 .pill.live.real .dot { background: #e07b1f; box-shadow: 0 0 0 3px color-mix(in oklab, #e07b1f 30%, transparent); }
+/* Degraded: live intended, but on the mock because the daily limit is spent. */
+.pill.live.degraded { background: var(--pink); }
+.pill.live.degraded .dot { background: #d6435f; box-shadow: 0 0 0 3px color-mix(in oklab, #d6435f 30%, transparent); animation: none; }
+/* ✕ to dismiss the offline banner. */
+.banner-x {
+  flex: 0 0 auto; appearance: none; border: 0; background: transparent; color: var(--ink-soft);
+  width: 26px; height: 26px; border-radius: 8px; cursor: pointer; font-size: 13px; line-height: 1;
+}
+.banner-x:hover { background: color-mix(in oklab, var(--ink) 10%, transparent); color: var(--ink); }
+/* Stacked full-width actions inside a modal (e.g. the live-reset prompt). */
+.cfg-stack { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.cfg-stack .btn { width: 100%; justify-content: center; }
 
 /* ---- Connection modal -------------------------------------------------- */
 .cfg-overlay {

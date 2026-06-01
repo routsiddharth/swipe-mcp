@@ -20,7 +20,7 @@
   <!-- deployment config (git-ignored; sets window.SWIPE_API_TOKEN/SWIPE_MODE
        from your env via scripts/gen_frontend_config.py). Optional — absent is
        fine; the app falls back to the Connection panel / mock mode. -->
-  <script src="config.js" onerror="void 0"></script>
+  <script src="config.js" onerror="this.remove()"></script>
 
   <!-- engine (plain JS) -->
   <script src="engine.js"></script>

@@ -19,7 +19,9 @@ the same agent and UI at the live API (see [Going live](#going-live-the-real-swi
 > payment, list, and ledger flows have been validated against a live account, and
 > the engine adapts to the several places where the live shapes differ from the
 > spec/mock (see `frontend/engine.js`). Live GST requires the Swipe account to
-> have its GSTIN configured, otherwise Swipe zeroes the tax.
+> have its GSTIN configured, otherwise Swipe zeroes the tax. The free key has a
+> small daily quota; once spent, the app degrades to the mock for reads (see
+> [Graceful degradation](#graceful-degradation-when-the-live-limit-is-hit)).
 
 ## Quick start (~30 seconds)
 
@@ -147,6 +149,23 @@ SWIPE_API_KEY=...  python scripts/seed_live.py --all    # + sample invoices
 
 See [`frontend/README.md`](frontend/README.md) for the full config precedence.
 The key is read from env / a git-ignored `.env`; it is never committed.
+
+### Graceful degradation when the live limit is hit
+
+The free Partner API has a small daily quota. When live calls start returning
+`API Limit Reached`, the frontend **degrades to the mock**: reads transparently
+switch to mock data, a small **"Daily limit reached"** tag appears in the header,
+and each new message silently re-probes the real API — when it resets, a prompt
+offers to start a fresh chat on the live account or stay on the mock. **Writes
+are not silently redirected:** a create/payment that hits the limit surfaces the
+limit and re-arms the confirm, so you knowingly re-confirm it against the mock
+(sample data) rather than believing a mock record landed on your real account.
+
+> ⚠️ Degradation targets the **local** mock (`http://127.0.0.1:8000`). It's meant
+> for local runs (mock + frontend on the same machine). On a hosted HTTPS deploy
+> with no mock running, a live-limit lapse can't fall back (localhost is
+> unreachable / mixed-content) — it shows the offline state instead. Host the
+> mock alongside the static site if you want degradation in production.
 
 ### Mock-server env vars (for the offline mock)
 

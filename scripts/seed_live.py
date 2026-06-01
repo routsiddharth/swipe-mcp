@@ -10,9 +10,11 @@ Usage:
     python scripts/seed_live.py --docs      # a few sample invoices (assumes master done)
     python scripts/seed_live.py --all       # master data + sample invoices
 
-Reads the key from SWIPE_API_KEY (or the repo-root .env). Idempotent-ish: it
-prints each call's result and keeps going on failure, so re-running after a
-partial seed is safe. Standard calls only (no e-invoice) to keep credit use low.
+Reads the key from SWIPE_API_KEY (or the repo-root .env). Re-runnable: it prints
+each call's result and keeps going on per-call failure, so re-running after a
+partial seed won't crash (re-POSTing an existing customer/product id may error
+on the server side — that's reported and skipped, not fatal). Standard calls
+only (no e-invoice) to keep credit use low.
 """
 from __future__ import annotations
 

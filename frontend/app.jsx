@@ -117,6 +117,31 @@ function ConnectionModal({ onClose, onApplied }) {
   );
 }
 
+// Shown when, mid-degraded-session, a probe finds the live Swipe API back after
+// a daily-limit lapse. The user picks: reconnect on a fresh chat, or stay here
+// on the mock. (Closing via the backdrop = stay on mock, the non-destructive
+// choice — it won't blow away the current conversation.)
+function LimitResetModal({ onNewLive, onStayMock }) {
+  return (
+    <div className="cfg-overlay" onMouseDown={onStayMock}>
+      <div className="cfg-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Live API available">
+        <div className="cfg-head">
+          <b>Live API is back</b>
+          <button className="cfg-x" aria-label="Close" onClick={onStayMock}>✕</button>
+        </div>
+        <p className="cfg-hint">
+          Your Swipe API limit has reset — the real account is responding again. This chat has been
+          running on the offline mock, so its data is sample data.
+        </p>
+        <div className="cfg-stack">
+          <button className="btn primary" onClick={onNewLive}>Start a new chat on the live API</button>
+          <button className="btn ghost" onClick={onStayMock}>Keep this chat on the mock</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [messages, setMessages] = useState([]);
@@ -126,13 +151,25 @@ function App() {
   // local cache of documents (sourced from + written through to the backend)
   const docsRef = useRef(E.SEED_DOCS.map((d) => ({ ...d })));
   const [online, setOnline] = useState(E.online);
-  const [mode, setMode] = useState(E.mode);
+  const [mode, setMode] = useState(E.mode);          // user's intent: "live" | "mock"
+  const [degraded, setDegraded] = useState(E.degraded); // live intended, on mock (limit)
   const [cfgOpen, setCfgOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);  // "live API is back" prompt
+  const [bannerDismissed, setBannerDismissed] = useState(false);
   const draftRef = useRef(null);       // { customer, lines, dueDays, dueDate, msgId }
   const lastDocRef = useRef(null);     // most recently touched document
   const streamRef = useRef(null);
   const lastAgentRef = useRef(null);
   const commitsRef = useRef({});       // msgId -> onCommit; consumed once (idempotent confirm)
+  const busyRef = useRef(false);       // mirror of `busy` for event handlers (stale-closure-safe)
+  const pendingResetRef = useRef(false); // a live-reset prompt deferred until the turn settles
+
+  // Keep busyRef in sync, and flush a deferred live-reset prompt once idle, so
+  // the reconnect modal never pops mid-stream (it can wipe an in-flight turn).
+  useEffect(() => {
+    busyRef.current = busy;
+    if (!busy && pendingResetRef.current) { pendingResetRef.current = false; setResetOpen(true); }
+  }, [busy]);
 
   // ---- theme / tweaks application --------------------------------------
   useEffect(() => {
@@ -144,6 +181,36 @@ function App() {
     if (el) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
   };
   useEffect(scrollDown, [messages]);
+
+  // ---- connection-state sync -------------------------------------------
+  // The engine fires "swipe:mode" when the effective connection changes — most
+  // notably when a live call hits the daily limit and it silently degrades to
+  // the mock. We just resync the small header indicator + document cache; no
+  // banner, no chat spam (the user shouldn't see the per-call live attempts).
+  useEffect(() => {
+    function onModeChange() {
+      setOnline(E.online);
+      setMode(E.mode);
+      setDegraded(!!E.degraded);
+      docsRef.current = E.SEED_DOCS.map((x) => ({ ...x }));
+      if (E.online) setBannerDismissed(false); // a fresh outage re-shows the banner
+    }
+    window.addEventListener("swipe:mode", onModeChange);
+    return () => window.removeEventListener("swipe:mode", onModeChange);
+  }, []);
+
+  // "swipe:livereset" fires when a per-message probe finds the real API back
+  // after a limit. Offer to reconnect (new chat) or stay on the mock — but if a
+  // turn is mid-stream, defer the prompt until it settles (the busy effect above
+  // flushes it), so accepting can't tear down an in-flight conversation.
+  useEffect(() => {
+    function onLiveReset() {
+      if (busyRef.current) pendingResetRef.current = true;
+      else setResetOpen(true);
+    }
+    window.addEventListener("swipe:livereset", onLiveReset);
+    return () => window.removeEventListener("swipe:livereset", onLiveReset);
+  }, []);
 
   // ---- message helpers --------------------------------------------------
   const patch = (id, p) =>
@@ -248,7 +315,13 @@ function App() {
       const amount = E.parseAmount(text);
       if (!amount) return planClarify(`What amount should I bill ${customer.name}? e.g. “₹50,000”.`);
       const item = E.describeItem(text);
-      lines = [{ id: item.id, name: item.name, item_type: item.item_type, qty: 1, rate: amount, gst: E.parseGst(text), unit: item.unit || "", hsn: item.hsn || "" }];
+      // Only override a matched product's GST when the user actually stated a
+      // rate — otherwise a 0%/exempt catalog item (e.g. Organic Rice) would be
+      // silently taxed at the 18% default. GST is the centerpiece; respect it.
+      const statedGst = /\d+(?:\.\d+)?\s*%|\bgst\b|\btax\b/i.test(text);
+      const gst = statedGst ? E.parseGst(text) : (item.product ? item.product.gst : E.parseGst(text));
+      const cess = item.product ? item.product.cess : 0;
+      lines = [{ id: item.id, name: item.name, item_type: item.item_type, qty: 1, rate: amount, gst, cess, unit: item.unit || "", hsn: item.hsn || "" }];
     }
     const dueDays = args.due_days != null ? Number(args.due_days) : E.parseDueDays(text);
     const dueDate = E.addDays(E.TODAY, dueDays);
@@ -547,6 +620,10 @@ function App() {
     if (!q || busy) return;
     setInput("");
     setBusy(true);
+    // While degraded, silently re-probe the real API (it may have reset). Fire
+    // and forget — the turn proceeds on the mock; if live is back, the engine
+    // raises "swipe:livereset" and we prompt to reconnect.
+    E.maybeProbeLive();
     setMessages((prev) => [...prev, { id: uid(), role: "user", text: q }]);
     scrollDown();
     await runTurn(q);
@@ -639,8 +716,11 @@ function App() {
   }
 
   async function retryConnect() {
+    setBannerDismissed(false);
     const ok = await E.reconnect();
     setOnline(ok);
+    setMode(E.mode);
+    setDegraded(!!E.degraded);
     if (ok) docsRef.current = E.SEED_DOCS.map((d) => ({ ...d }));
   }
 
@@ -649,9 +729,34 @@ function App() {
   function onConnectionApplied() {
     setOnline(E.online);
     setMode(E.mode);
+    setDegraded(!!E.degraded);
+    setBannerDismissed(false);
     docsRef.current = E.SEED_DOCS.map((d) => ({ ...d }));
     draftRef.current = null;
     lastDocRef.current = null;
+  }
+
+  // Live API recovered: (a) reconnect on a fresh chat, or (b) stay on the mock.
+  async function acceptLive() {
+    setResetOpen(false);
+    const ok = await E.resumeLive();
+    setOnline(E.online);
+    setMode(E.mode);
+    setDegraded(!!E.degraded);
+    // Only start a clean live chat if the reconnect actually succeeded — if the
+    // boot failed (live flaked right after the probe), keep the current chat
+    // rather than wiping a recoverable conversation into an offline session.
+    if (ok) {
+      setMessages([]);
+      draftRef.current = null;
+      lastDocRef.current = null;
+      docsRef.current = E.SEED_DOCS.map((d) => ({ ...d }));
+    }
+  }
+  function declineLive() {
+    E.stayOnMock();
+    setResetOpen(false);
+    setDegraded(!!E.degraded);
   }
 
   // ---- render -----------------------------------------------------------
@@ -664,12 +769,17 @@ function App() {
           <span className="wordmark">swipe</span>
         </div>
         <span className="pill"><span style={{ fontSize: 14 }}>🇮🇳</span> IN</span>
-        {online
-          ? <span className={"pill live" + (mode === "live" ? " real" : "")} onClick={() => setCfgOpen(true)}
-                  title="Connection settings" style={{ cursor: "pointer" }}>
-              <span className="dot" /> {mode === "live" ? "Live · Swipe account" : "Mock backend"}
-            </span>
-          : <span className="pill offline" onClick={retryConnect} title="Click to retry">Backend offline</span>}
+        {!online
+          ? <span className="pill offline" onClick={retryConnect} title="Click to retry">Backend offline</span>
+          : degraded
+            ? <span className="pill live degraded" onClick={() => setCfgOpen(true)} style={{ cursor: "pointer" }}
+                    title="Live Swipe API daily limit reached — running on the offline mock. You'll be prompted to reconnect when the limit resets.">
+                <span className="dot" /> Daily limit reached
+              </span>
+            : <span className={"pill live" + (mode === "live" ? " real" : "")} onClick={() => setCfgOpen(true)}
+                    title="Connection settings" style={{ cursor: "pointer" }}>
+                <span className="dot" /> {mode === "live" ? "Live · Swipe account" : "Mock backend"}
+              </span>}
         <span className="spacer" />
         <button className="btn ghost icon" onClick={() => setCfgOpen(true)} title="Connection / API key" aria-label="Connection settings">
           <Ic d={["M12 15a3 3 0 100-6 3 3 0 000 6z", "M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"]} size={17} sw={2} />
@@ -682,14 +792,13 @@ function App() {
       {cfgOpen && <ConnectionModal onClose={() => setCfgOpen(false)} onApplied={onConnectionApplied} />}
 
       <div className="stream-wrap" ref={streamRef}>
-        {!online && (
+        {!online && !bannerDismissed && (
           <div className="offline-banner">
-            <span>⚠ Can't reach the Swipe API at <code>{E.apiBase}</code>.{" "}
-            {mode === "live"
-              ? "Check the backend is running and your API key is valid."
-              : <>Start the backend (<code>uvicorn mock_backend.main:app</code>), then</>}</span>
+            <span>⚠ Can't reach the backend at <code>{E.apiBase}</code>.{" "}
+            Start it (<code>uvicorn mock_backend.main:app</code>), then</span>
             <button className="btn" onClick={() => setCfgOpen(true)}>Connection</button>
             <button className="btn" onClick={retryConnect}>Retry</button>
+            <button className="banner-x" onClick={() => setBannerDismissed(true)} aria-label="Dismiss">✕</button>
           </div>
         )}
         {empty ? (
@@ -713,6 +822,7 @@ function App() {
         onSend={() => send()} busy={busy}
         showQuick={!empty} onPick={(q) => send(q)}
       />
+      {resetOpen && <LimitResetModal onNewLive={acceptLive} onStayMock={declineLive} />}
 
       <TweaksPanel>
         <TweakSection label="Surface" />
