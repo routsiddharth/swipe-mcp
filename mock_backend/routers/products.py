@@ -21,6 +21,7 @@ def _record(p: dict) -> dict:
         "selling_price": p["selling_price"],
         "purchase_price": p.get("purchase_price", 0),
         "tax_rate": p.get("tax_rate", 0),
+        "cess_rate": p.get("cess_rate", 0),
         "unit": p.get("unit"),
         "hsn_code": p.get("hsn_code"),
         "item_type": p.get("item_type", "Product"),

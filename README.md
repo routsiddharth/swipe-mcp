@@ -103,6 +103,15 @@ pytest -q
 `tests/test_gst.py` pins the GST math to the spec examples; `tests/test_api.py`
 runs end-to-end endpoint flows via FastAPI's TestClient (no network, no key).
 
+## Conversational frontend
+
+[`frontend/`](frontend/) is a one-surface demo UI: you talk to Swipe in plain
+English and an agent composes the action, shows the GST breakdown, and (on
+confirm for writes) drives this backend's API for real. It runs in the browser
+with no build step — start this backend, then serve `frontend/` over HTTP and
+open it. See [`frontend/README.md`](frontend/README.md). CORS is enabled here so
+the browser can call the API directly (configurable via `MOCK_CORS_ORIGINS`).
+
 ## Going live later
 
 Auth and config are env-driven, so the same code can point at the real API:
@@ -112,6 +121,12 @@ Auth and config are env-driven, so the same code can point at the real API:
 | `MOCK_REQUIRE_AUTH` | `true` | Enforce the `Authorization: Bearer` header |
 | `MOCK_API_TOKEN` | _(empty)_ | If set, only this token is accepted; empty = accept any |
 | `MOCK_HOST` / `MOCK_PORT` | `127.0.0.1` / `8000` | Bind address |
+| `MOCK_CORS_ORIGINS` | `*` | Comma-separated allowed browser origins |
+
+> ⚠️ The defaults are tuned for a zero-setup local demo: CORS is open (`*`) and
+> any non-empty token is accepted. If you deploy this mock anywhere public, set
+> `MOCK_CORS_ORIGINS` to your frontend's origin and `MOCK_API_TOKEN` to a real
+> token — otherwise the mock is world-writable.
 
 ## Layout
 

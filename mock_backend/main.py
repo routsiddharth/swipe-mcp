@@ -10,9 +10,11 @@ import logging
 from fastapi import Depends, FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .auth import require_auth
+from .config import settings
 from .errors import SwipeError, error_body, swipe_error_handler
 from .routers import documents, misc, parties, payments, products
 from .store import db
@@ -26,6 +28,18 @@ app = FastAPI(
         "Offline mock of Swipe's Partner API v2, built to the public OpenAPI "
         "spec. Same request/response shapes; GST math computed for real."
     ),
+)
+
+# --- CORS: let the browser frontend (served from any local origin / file) ---- #
+# call the API directly. The real Partner API is server-to-server, but this mock
+# is meant to be driven from the demo web UI, so we allow cross-origin requests.
+# Overridable via MOCK_CORS_ORIGINS (comma-separated); defaults to "*".
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # --- Exception handlers: every error uses Swipe's envelope ------------------ #
@@ -68,6 +82,19 @@ app.include_router(misc.router, dependencies=_auth)
 @app.get("/health", tags=["Mock"])
 async def health() -> dict:
     return {"status": "ok", "mode": "mock"}
+
+
+@app.get("/v2/_mock/company", tags=["Mock"])
+async def company() -> dict:
+    """Expose the seller (company) profile so the frontend can show the right
+    intra/inter-state GST split. The real API has no public company endpoint;
+    this is a mock-only convenience that mirrors `store.company`.
+
+    Note: like `/v2/_mock/reset`, the `/v2/_mock/*` helpers intentionally return
+    bare dicts rather than the Swipe success envelope — they're out-of-band dev
+    helpers, not spec endpoints, and the frontend reads this shape directly.
+    """
+    return db.company
 
 
 @app.post("/v2/_mock/reset", tags=["Mock"])
