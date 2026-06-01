@@ -157,6 +157,73 @@ body {
 .btn.primary { background: var(--accent); color: var(--accent-ink); }
 .btn.ghost { box-shadow: none; border-color: transparent; background: transparent; }
 .btn.ghost:hover { box-shadow: none; background: color-mix(in oklab, var(--ink) 7%, transparent); transform: none; }
+.btn.icon { padding: 8px; }
+.btn:disabled { opacity: .55; cursor: default; transform: none; box-shadow: var(--shadow-sm); }
+.pill.live.real { background: var(--peach); }
+.pill.live.real .dot { background: #e07b1f; box-shadow: 0 0 0 3px color-mix(in oklab, #e07b1f 30%, transparent); }
+
+/* ---- Connection modal -------------------------------------------------- */
+.cfg-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  display: grid; place-items: center; padding: 20px;
+  background: color-mix(in oklab, var(--shadowc) 45%, transparent);
+  -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+}
+.cfg-modal {
+  width: 100%; max-width: 440px;
+  background: var(--bg-panel); color: var(--ink);
+  border: var(--bw) solid var(--line); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 20px 22px 18px;
+  display: flex; flex-direction: column; gap: 9px;
+  font-size: 14px;
+}
+.cfg-head { display: flex; align-items: center; justify-content: space-between; }
+.cfg-head b { font-family: var(--font-display); font-size: 19px; }
+.cfg-x {
+  appearance: none; border: 0; background: transparent; color: var(--ink-soft);
+  width: 30px; height: 30px; border-radius: 9px; cursor: pointer; font-size: 15px; line-height: 1;
+}
+.cfg-x:hover { background: color-mix(in oklab, var(--ink) 8%, transparent); color: var(--ink); }
+.cfg-label { font-weight: 700; font-size: 12.5px; margin-top: 4px; }
+.cfg-seg {
+  display: flex; gap: 6px; padding: 4px;
+  background: color-mix(in oklab, var(--ink) 6%, transparent);
+  border-radius: 12px; border: var(--bw) solid var(--line);
+}
+.cfg-seg button {
+  flex: 1; appearance: none; border: 0; background: transparent; color: var(--ink);
+  font-family: var(--font-body); font-weight: 700; font-size: 13px;
+  padding: 8px 6px; border-radius: 9px; cursor: pointer;
+}
+.cfg-seg button.on { background: var(--accent); color: var(--accent-ink); box-shadow: var(--shadow-sm); }
+.cfg-hint { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-soft); }
+.cfg-hint code, .offline-banner code { font-family: var(--font-mono); font-size: 11.5px;
+  background: color-mix(in oklab, var(--ink) 8%, transparent); padding: 1px 5px; border-radius: 5px; }
+.cfg-field {
+  width: 100%; box-sizing: border-box;
+  font-family: var(--font-mono); font-size: 13px;
+  padding: 10px 12px; border-radius: 11px;
+  border: var(--bw) solid var(--line); background: var(--bg); color: var(--ink);
+  outline: none;
+}
+.cfg-field:focus { border-color: var(--accent); }
+.cfg-key { display: flex; gap: 8px; align-items: stretch; }
+.cfg-key .cfg-field { flex: 1; min-width: 0; }
+.cfg-eye { flex: 0 0 auto; font-size: 13px; padding: 8px 12px; }
+.cfg-adv-toggle {
+  appearance: none; border: 0; background: transparent; color: var(--ink-soft);
+  font-family: var(--font-body); font-weight: 700; font-size: 12.5px;
+  padding: 2px 0; cursor: pointer; text-align: left; align-self: flex-start;
+}
+.cfg-adv-toggle:hover { color: var(--ink); }
+.cfg-note {
+  font-size: 13px; font-weight: 600; padding: 9px 12px; border-radius: 10px;
+  border: var(--bw) solid var(--line);
+}
+.cfg-note.ok { background: var(--green); }
+.cfg-note.err { background: var(--pink); }
+.cfg-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
 
 /* ---- Conversation ------------------------------------------------------ */
 .stream-wrap { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; }
@@ -280,8 +347,9 @@ body {
 .grand .lab { font-weight: 700; font-size: 15px; }
 .grand .val { font-family: var(--font-display); font-weight: 700; font-size: 24px; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
 
-.split-note { display: flex; align-items: center; gap: 7px; margin-top: 11px; font-size: 12.5px; color: var(--ink-soft); font-weight: 500; }
+.split-note { display: flex; align-items: center; gap: 7px; margin-top: 11px; font-size: 12.5px; color: var(--ink-soft); font-weight: 500; flex-wrap: wrap; }
 .split-note .bolt { color: var(--accent); }
+.split-note .assumed { opacity: .7; font-style: italic; font-weight: 500; }
 
 /* confirm bar */
 .confirm-bar {

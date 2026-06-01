@@ -9,3 +9,6 @@ venv/
 
 # Local project memory for Claude Code — not part of the published artifact
 CLAUDE.md
+
+# Generated frontend deployment config — holds the API key (secret)
+frontend/config.js

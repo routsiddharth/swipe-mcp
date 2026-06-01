@@ -73,12 +73,17 @@ function InvoiceCard({ inv, customer, meta, status, serial }) {
 
         <div className="totals">
           <div className="totline"><span className="lab">Taxable value</span><span className="val">{INR(inv.net)}</span></div>
-          {inv.breakup.map((b, i) => (
-            <div className="totline" key={i}>
-              <span className="lab">{b.label}<span className="gstchip">{inv.intra ? (inv.slabs[0].rate / 2) : inv.slabs[0].rate}%</span></span>
-              <span className="val">{INR(b.amount)}</span>
-            </div>
-          ))}
+          {inv.breakup.map((b, i) => {
+            // Single-slab invoices show the rate on the chip; multi-rate ones
+            // can't be summarised by one number, so the chip is omitted.
+            const single = inv.slabs.length === 1;
+            return (
+              <div className="totline" key={i}>
+                <span className="lab">{b.label}{single && <span className="gstchip">{inv.intra ? (inv.slabs[0].rate / 2) : inv.slabs[0].rate}%</span>}</span>
+                <span className="val">{INR(b.amount)}</span>
+              </div>
+            );
+          })}
           <div className="grand">
             <span className="lab">Grand total</span>
             <span className="val">{INR(inv.grand)}</span>
@@ -88,6 +93,7 @@ function InvoiceCard({ inv, customer, meta, status, serial }) {
             {inv.intra
               ? <span>Intra-state supply — tax split <b>CGST + SGST</b> (both parties in {customer.state}).</span>
               : <span>Inter-state supply — single <b>IGST</b> ({window.SwipeEngine.SELLER.state} → {customer.state}).</span>}
+            {inv.assumed && <span className="assumed"> · split assumes seller in {window.SwipeEngine.SELLER.state}; set your state to confirm.</span>}
           </div>
         </div>
 
@@ -221,4 +227,46 @@ function GstinCard({ data }) {
   );
 }
 
-Object.assign(window, { Ic, ICONS, StatusBadge, InvoiceCard, PaymentCard, DocListCard, LedgerCard, GstinCard });
+/* ---- Customer list ----------------------------------------------------- */
+function CustomerListCard({ customers }) {
+  return (
+    <div className="card">
+      <div className="card-top">
+        <span className="tag">{customers.length} CUSTOMERS</span>
+        <div style={{ flex: 1 }}><h3>Customers</h3><div className="sub">via MCP · list_customers</div></div>
+      </div>
+      <div className="doclist">
+        {customers.map((c) => (
+          <div className="docrow" key={c.id}>
+            <span className="who" style={{ flex: 1 }}>{c.name}<small>{c.company || c.email || c.phone || "—"}</small></span>
+            <span className="amt" style={{ textAlign: "right" }}>
+              {c.gstin || "no GSTIN"}<small>{c.state || c.id}</small>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---- Product / item catalog ------------------------------------------- */
+function ProductListCard({ products }) {
+  return (
+    <div className="card">
+      <div className="card-top">
+        <span className="tag">{products.length} ITEMS</span>
+        <div style={{ flex: 1 }}><h3>Catalog</h3><div className="sub">via MCP · list_products</div></div>
+      </div>
+      <div className="doclist">
+        {products.map((p) => (
+          <div className="docrow" key={p.id}>
+            <span className="who" style={{ flex: 1 }}>{p.name}<small>{p.item_type}{p.hsn ? " · HSN " + p.hsn : ""}{p.unit ? " · " + p.unit : ""}</small></span>
+            <span className="amt" style={{ textAlign: "right" }}>{INR(p.rate)}<small>{p.gst}% GST{p.cess ? " + " + p.cess + "% cess" : ""}</small></span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, { Ic, ICONS, StatusBadge, InvoiceCard, PaymentCard, DocListCard, LedgerCard, GstinCard, CustomerListCard, ProductListCard });

@@ -17,6 +17,11 @@
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
+  <!-- deployment config (git-ignored; sets window.SWIPE_API_TOKEN/SWIPE_MODE
+       from your env via scripts/gen_frontend_config.py). Optional — absent is
+       fine; the app falls back to the Connection panel / mock mode. -->
+  <script src="config.js" onerror="void 0"></script>
+
   <!-- engine (plain JS) -->
   <script src="engine.js"></script>
 

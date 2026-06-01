@@ -37,7 +37,7 @@ function TraceBlock({ msg, onToggle }) {
               <span className="ic">{running ? <span className="spin" /> : <Ic d={ICONS.check} size={12} sw={3} />}</span>
               <span style={{ flex: 1 }}>
                 <span className="tool">{s.tool}</span>{"  "}
-                <span className="lbl" dangerouslySetInnerHTML={{ __html: s.label }} />
+                <span className="lbl" dangerouslySetInnerHTML={{ __html: window.SwipeEngine.safeHtml(s.label) }} />
               </span>
             </div>
           );
@@ -56,6 +56,8 @@ function CardRenderer({ card }) {
     case "list": return <DocListCard {...card.props} />;
     case "ledger": return <LedgerCard {...card.props} />;
     case "gstin": return <GstinCard {...card.props} />;
+    case "customers": return <CustomerListCard {...card.props} />;
+    case "products": return <ProductListCard {...card.props} />;
     default: return null;
   }
 }
@@ -78,7 +80,7 @@ function AgentMessage({ msg, onToggleTrace, onConfirm, onCancel }) {
       <div className="avatar"><SwipeMark2 /></div>
       <div className="agent-col">
         {msg.text != null && (
-          <div className="agent-text" dangerouslySetInnerHTML={{ __html: msg.text }} />
+          <div className="agent-text" dangerouslySetInnerHTML={{ __html: window.SwipeEngine.safeHtml(msg.text) }} />
         )}
         {msg.streaming && msg.text === "" && <span className="cursor" />}
         {msg.trace && msg.trace.length > 0 && msg.shownTrace > 0 && (
@@ -92,7 +94,7 @@ function AgentMessage({ msg, onToggleTrace, onConfirm, onCancel }) {
           <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
             <span className="stamp">{msg.stampText || "Done!"}</span>
             <span style={{ fontWeight: 600, color: "var(--ink-soft)", fontSize: 14 }}
-                  dangerouslySetInnerHTML={{ __html: msg.committedNote }} />
+                  dangerouslySetInnerHTML={{ __html: window.SwipeEngine.safeHtml(msg.committedNote) }} />
           </div>
         )}
         {msg.cancelled && (

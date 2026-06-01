@@ -17,6 +17,106 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "dark": false
 }/*EDITMODE-END*/;
 
+// ---- Connection settings (mock ↔ live, API key) ------------------------- //
+// Lets the user paste their real Swipe API key and switch the agent from the
+// local mock to their live Swipe account. Live calls go straight to
+// app.getswipe.in from the browser (it sends permissive CORS) — no proxy.
+function ConnectionModal({ onClose, onApplied }) {
+  const [mode, setMode] = useState(E.mode || "mock");
+  const [backend, setBackend] = useState(E.backend || "http://127.0.0.1:8000");
+  const [token, setToken] = useState(E.token === "demo" ? "" : (E.token || ""));
+  const [showKey, setShowKey] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [status, setStatus] = useState(null); // {busy}|{ok,msg}|{err,msg}
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  async function apply() {
+    const tok = token.trim() || (mode === "live" ? "" : "demo");
+    if (mode === "live" && !tok) {
+      setStatus({ err: true, msg: "Live mode needs your Swipe API key." });
+      return;
+    }
+    setStatus({ busy: true });
+    const ok = await E.configure({ mode, backend: backend.trim(), token: tok });
+    if (ok) {
+      setStatus({ ok: true, msg: mode === "live"
+        ? "Connected to your live Swipe account."
+        : "Connected to the local mock backend." });
+      onApplied();
+      setTimeout(onClose, 900);
+    } else {
+      setStatus({ err: true, msg: E.lastError || "Couldn't connect — check the backend is running." });
+    }
+  }
+
+  return (
+    <div className="cfg-overlay" onMouseDown={onClose}>
+      <div className="cfg-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Connection settings">
+        <div className="cfg-head">
+          <b>Connection</b>
+          <button className="cfg-x" aria-label="Close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="cfg-label">Talk to</div>
+        <div className="cfg-seg" role="radiogroup">
+          {[["mock", "Mock backend"], ["live", "Live Swipe account"]].map(([v, label]) => (
+            <button key={v} type="button" role="radio" aria-checked={mode === v}
+              className={mode === v ? "on" : ""} onClick={() => { setMode(v); setStatus(null); }}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="cfg-hint">
+          {mode === "live"
+            ? "Drives your real Swipe account at app.getswipe.in directly. Writes (invoices, payments) are real."
+            : "Offline FastAPI mock — any key works, nothing leaves your machine. Best for the demo."}
+        </p>
+
+        <div className="cfg-label">{mode === "live" ? "Swipe API key" : "API key (any value in mock)"}</div>
+        <div className="cfg-key">
+          <input className="cfg-field" type={showKey ? "text" : "password"}
+            value={token} placeholder={mode === "live" ? "eyJhbGciOiJI…  (from Swipe → API Integration)" : "demo"}
+            autoComplete="off" spellCheck={false}
+            onChange={(e) => { setToken(e.target.value); setStatus(null); }} />
+          <button type="button" className="btn ghost cfg-eye" onClick={() => setShowKey((s) => !s)}>
+            {showKey ? "Hide" : "Show"}
+          </button>
+        </div>
+
+        <button type="button" className="cfg-adv-toggle" onClick={() => setShowAdvanced((s) => !s)}>
+          {showAdvanced ? "▾" : "▸"} Advanced
+        </button>
+        {showAdvanced && (
+          <>
+            <div className="cfg-label">Mock backend URL</div>
+            <input className="cfg-field" type="text" value={backend} spellCheck={false}
+              onChange={(e) => { setBackend(e.target.value); setStatus(null); }} />
+            <p className="cfg-hint">
+              Only used in mock mode. Live mode talks to <code>app.getswipe.in</code> directly.
+            </p>
+          </>
+        )}
+
+        {status && (status.ok || status.err) && (
+          <div className={"cfg-note " + (status.ok ? "ok" : "err")}>{status.msg}</div>
+        )}
+
+        <div className="cfg-foot">
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" onClick={apply} disabled={status && status.busy}>
+            {status && status.busy ? "Connecting…" : "Save & connect"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [messages, setMessages] = useState([]);
@@ -26,6 +126,8 @@ function App() {
   // local cache of documents (sourced from + written through to the backend)
   const docsRef = useRef(E.SEED_DOCS.map((d) => ({ ...d })));
   const [online, setOnline] = useState(E.online);
+  const [mode, setMode] = useState(E.mode);
+  const [cfgOpen, setCfgOpen] = useState(false);
   const draftRef = useRef(null);       // { customer, lines, dueDays, dueDate, msgId }
   const lastDocRef = useRef(null);     // most recently touched document
   const streamRef = useRef(null);
@@ -70,38 +172,99 @@ function App() {
 
   // ---- intent → plan ----------------------------------------------------
   async function planFor(text) {
-    const ctx = { draft: draftRef.current };
-    const { intent, gstin } = E.classify(text, ctx);
-    switch (intent) {
-      case "create_invoice": return planCreate(text);
-      case "edit_draft": return planEdit(text);
-      case "record_payment": return planPayment(text);
-      case "list_invoices": return await planList(text);
-      case "outstanding": return await planOutstanding(text);
-      case "gstin_lookup": return await planGstin(text, gstin);
+    const ctx = {
+      draft: draftRef.current,
+      history: messages.slice(-6)
+        .map((m) => ({ role: m.role === "user" ? "user" : "assistant", text: (m.text || "").replace(/<[^>]+>/g, "").trim() }))
+        .filter((h) => h.text),
+    };
+    // LLM is the brain when a key is configured; otherwise the regex NLU.
+    let route = null;
+    if (E.llmEnabled) {
+      try { route = await E.llmPlan(text, ctx); }
+      catch (e) { console.warn("LLM planning failed, using regex fallback:", e); }
+    }
+    if (!route) {
+      const { intent, gstin } = E.classify(text, ctx);
+      route = { tool: intent, args: { gstin } };
+    }
+    const a = route.args || {};
+    switch (route.tool) {
+      case "create_invoice": return planCreate(text, a);
+      case "edit_draft": return planEdit(text, a);
+      case "record_payment": return planPayment(text, a);
+      case "list_invoices": return await planList(text, a);
+      case "list_customers": return planListCustomers();
+      case "list_products": return planListProducts();
+      case "customer_outstanding":
+      case "outstanding": return await planOutstanding(text, a);
+      case "lookup_gstin":
+      case "gstin_lookup": return await planGstin(text, a.gstin);
+      case "reply": return planMessage(a.message);
       default: return planUnknown(text);
     }
   }
 
-  function planCreate(text) {
-    const customer = E.findCustomer(text);
-    const amount = E.parseAmount(text);
+  // Local helpers for turning LLM-extracted args into engine line items.
+  const slugId = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 20) || "item";
+  const titleCase = (s) => String(s || "").trim().replace(/\s+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  function lineFromArg(it) {
+    // The model controls this shape — coerce anything non-object to a safe stub
+    // so a stray `null`/string in items[] can't throw and lock up the turn.
+    if (!it || typeof it !== "object") it = { name: typeof it === "string" ? it : "Item" };
+    let prod = null;
+    if (it.item_id) prod = E.PRODUCTS.find((p) => p.id === it.item_id);
+    if (!prod && it.name) prod = E.findProduct(it.name);
+    return {
+      id: it.item_id || (prod && prod.id) || ("GEN-" + slugId(it.name)),
+      name: titleCase(it.name || (prod && prod.name) || "Item"),
+      item_type: it.item_type || (prod && prod.item_type) || "Product",
+      qty: Number(it.quantity) || 1,
+      rate: it.unit_price != null ? Number(it.unit_price) : (prod ? prod.rate : 0),
+      gst: it.tax_rate != null ? Number(it.tax_rate) : (prod ? prod.gst : 18),
+      cess: it.cess_rate != null ? Number(it.cess_rate) : (prod ? prod.cess : 0),
+      unit: it.unit || (prod && prod.unit) || "",
+      hsn: it.hsn_code || (prod && prod.hsn) || "",
+      discountPercent: it.discount_percent != null ? Number(it.discount_percent) : undefined,
+    };
+  }
+
+  function planCreate(text, args = {}) {
+    // Resolve the customer: LLM id → LLM name → free-text match → new party.
+    let customer = args.customer_id ? E.findCustomerById(args.customer_id) : null;
+    if (!customer && args.customer_name) customer = E.findCustomer(args.customer_name);
+    if (!customer) customer = E.findCustomer(text);
+    if (!customer && args.customer_name) {
+      customer = { id: "CUST-" + slugId(args.customer_name), name: titleCase(args.customer_name), gstin: "", state: "", stateCode: "", company: "", phone: "", email: "" };
+    }
     if (!customer) return planClarify("Which customer is this for? I can bill " +
       E.CUSTOMERS.map((c) => c.name).slice(0, 3).join(", ") + " and others.");
-    if (!amount) return planClarify(`What amount should I bill ${customer.name}? e.g. “₹50,000”.`);
-    const gst = E.parseGst(text);
-    const dueDays = E.parseDueDays(text);
-    const item = E.describeItem(text);
+
+    // Build line items from the LLM's structured items, else parse the sentence.
+    let lines;
+    if (Array.isArray(args.items) && args.items.length) {
+      lines = args.items.map(lineFromArg);
+    } else {
+      const amount = E.parseAmount(text);
+      if (!amount) return planClarify(`What amount should I bill ${customer.name}? e.g. “₹50,000”.`);
+      const item = E.describeItem(text);
+      lines = [{ id: item.id, name: item.name, item_type: item.item_type, qty: 1, rate: amount, gst: E.parseGst(text), unit: item.unit || "", hsn: item.hsn || "" }];
+    }
+    const dueDays = args.due_days != null ? Number(args.due_days) : E.parseDueDays(text);
     const dueDate = E.addDays(E.TODAY, dueDays);
-    const lines = [{ id: item.id, name: item.name, item_type: item.item_type, qty: 1, rate: amount, gst, unit: item.unit || "", hsn: item.hsn || "" }];
     const inv = E.computeInvoice(lines, customer);
+    // Amending a pending draft? Supersede its confirm bar so only one is live.
+    if (draftRef.current && draftRef.current.msgId) patch(draftRef.current.msgId, { confirm: null, supersededNote: true });
     const draft = { customer, lines, dueDays, dueDate };
+    const rates = [...new Set(lines.map((l) => l.gst))];
+    const gstLabel = rates.length === 1 ? `${rates[0]}%` : "GST";
+    const itemsLabel = lines.length === 1 ? lines[0].name : `${lines.length} line items`;
     return {
       intro: `Got it — composing an invoice for <b>${customer.name}</b>. Here's the GST worked out <i>before</i> I create anything:`,
       trace: [
-        { tool: "resolve_customer", label: `Matched <b>${customer.name}</b> · GSTIN ${customer.gstin}` },
-        { tool: "get_tax_profile", label: `Place of supply <b>${customer.state} (${customer.stateCode})</b> → ${inv.intra ? "intra-state" : "inter-state"}` },
-        { tool: "compute_gst", label: `${gst}% on ${E.formatINR(inv.net)} = <b>${E.formatINR(inv.tax)}</b> ${inv.intra ? "(CGST + SGST)" : "(IGST)"}` },
+        { tool: "resolve_customer", label: `Matched <b>${customer.name}</b>${customer.gstin ? " · GSTIN " + customer.gstin : ""}` },
+        { tool: "get_tax_profile", label: `Place of supply <b>${customer.state || "—"}${customer.stateCode ? " (" + customer.stateCode + ")" : ""}</b> → ${inv.intra ? "intra-state" : "inter-state"}` },
+        { tool: "compute_gst", label: `${gstLabel} on ${E.formatINR(inv.net)} (${itemsLabel}) = <b>${E.formatINR(inv.tax)}</b> ${inv.intra ? "(CGST + SGST)" : "(IGST)"}` },
         { tool: "compose_document", label: `Drafted invoice · grand total <b>${E.formatINR(inv.grand)}</b>` },
       ],
       card: { type: "invoice", props: { inv, customer, meta: { dueDate }, status: "draft" } },
@@ -122,6 +285,9 @@ function App() {
     };
   }
 
+  // Regex-only fallback path: the LLM expresses edits by re-emitting
+  // create_invoice with the full updated draft, so it never routes here and the
+  // structured args are intentionally unused.
   function planEdit(text) {
     const draft = draftRef.current;
     if (!draft) return planUnknown(text);
@@ -178,13 +344,17 @@ function App() {
     };
   }
 
-  function resolveTargetDoc(text) {
-    const serialM = text.match(/inv[-\s]?0?(\d{1,4})/i);
+  const METHOD_LABEL = { upi: "UPI", cash: "Cash", card: "Card", cheque: "Cheque", emi: "EMI", netBanking: "Bank transfer" };
+
+  function resolveTargetDoc(text, ref) {
+    ref = String(ref || "");
+    if ((/last|recent|latest|\bit\b|that|this|above/i.test(ref) ||
+         (!ref && /\b(it|that|this|the invoice|above)\b/i.test(text))) && lastDocRef.current) return lastDocRef.current;
+    const serialM = (ref + " " + text).match(/inv[-\s]?0?(\d{1,4})/i) || ref.match(/^\s*0*(\d{1,4})\s*$/);
     if (serialM) {
-      const d = docsRef.current.find((x) => x.serial.replace(/\D/g, "") === serialM[1].padStart(3, "0") || x.serial.toLowerCase().includes(serialM[1]));
+      const d = docsRef.current.find((x) => x.serial && (x.serial.replace(/\D/g, "") === serialM[1].padStart(3, "0") || x.serial.toLowerCase().includes(serialM[1])));
       if (d) return d;
     }
-    if (/\b(it|that|this|the invoice|above)\b/i.test(text) && lastDocRef.current) return lastDocRef.current;
     const cust = E.findCustomer(text);
     if (cust) {
       const open = docsRef.current.filter((d) => d.customerId === cust.id && E.docStatus(d) !== "paid");
@@ -193,13 +363,19 @@ function App() {
     return lastDocRef.current;
   }
 
-  function planPayment(text) {
-    const amount = E.parseAmount(text);
-    const method = E.parseMethod(text);
-    const doc = resolveTargetDoc(text);
+  function planPayment(text, args = {}) {
+    const amount = args.amount != null ? Number(args.amount) : E.parseAmount(text);
+    const method = args.method ? (METHOD_LABEL[args.method] || args.method) : E.parseMethod(text);
+    const doc = resolveTargetDoc(text, args.document_ref);
     if (!doc) return planClarify("Which invoice should I record the payment against? Create one first or name a serial like INV-008.");
     if (!amount) return planClarify(`How much was paid against ${doc.serial}?`);
     const t0 = E.docTotals(doc);
+    // The live API rejects a payment greater than the balance
+    // (AMOUNT_RECEIVED_GREATER_THAN_TOTAL_AMOUNT) — catch it here so the preview
+    // is honest rather than showing a checkmark that the write will then reject.
+    if (amount > t0.due + 0.01) {
+      return planClarify(`That's more than ${doc.serial}'s outstanding balance of <b>${E.formatINR(t0.due)}</b>. Want me to record exactly ${E.formatINR(t0.due)} to settle it, or a smaller amount?`);
+    }
     return {
       intro: `Recording a <b>${E.formatINR(amount)}</b> ${method} payment against <b>${doc.serial}</b> (${t0.customer.name}).`,
       trace: [
@@ -226,15 +402,17 @@ function App() {
     };
   }
 
-  async function planList(text) {
+  async function planList(text, args = {}) {
     const tl = text.toLowerCase();
     // We filter by status only (the backend holds all dates), so the copy below
     // reflects exactly that — no invented "this quarter" period.
-    let filter = "unpaid", title = "Unpaid invoices";
-    if (/overdue/.test(tl)) { filter = "overdue"; title = "Overdue invoices"; }
-    else if (/unpaid|outstanding|pending|not paid|\bdue\b/.test(tl)) { filter = "unpaid"; title = "Unpaid invoices"; }
-    else if (/\bpaid\b/.test(tl)) { filter = "paid"; title = "Paid invoices"; }
-    else if (/\ball\b|every|each/.test(tl)) { filter = "all"; title = "All invoices"; }
+    let filter = "unpaid";
+    if (args.status) { filter = args.status; }
+    else if (/overdue/.test(tl)) { filter = "overdue"; }
+    else if (/unpaid|outstanding|pending|not paid|\bdue\b/.test(tl)) { filter = "unpaid"; }
+    else if (/\bpaid\b/.test(tl)) { filter = "paid"; }
+    else if (/\ball\b|every|each/.test(tl)) { filter = "all"; }
+    const title = { all: "All invoices", unpaid: "Unpaid invoices", paid: "Paid invoices", overdue: "Overdue invoices" }[filter] || "Invoices";
     let all;
     try { all = await E.listInvoices(); docsRef.current = all; }
     catch (e) { return planClarify(`I couldn't reach the Swipe API to list invoices — is the mock backend running? (${e.message})`); }
@@ -258,8 +436,10 @@ function App() {
     };
   }
 
-  async function planOutstanding(text) {
-    const customer = E.findCustomer(text);
+  async function planOutstanding(text, args = {}) {
+    let customer = args.customer_id ? E.findCustomerById(args.customer_id) : null;
+    if (!customer && args.customer_name) customer = E.findCustomer(args.customer_name);
+    if (!customer) customer = E.findCustomer(text);
     if (!customer) return planClarify("Whose outstanding balance — e.g. Globex Corporation, Initech Solutions, Umbrella Retail?");
     let led, docs;
     try {
@@ -299,6 +479,31 @@ function App() {
     };
   }
 
+  async function planListCustomers() {
+    let custs = E.CUSTOMERS;
+    try { await E.reconnect(); custs = E.CUSTOMERS; } catch (e) { /* use cached */ }
+    return {
+      intro: `You have <b>${custs.length}</b> customer${custs.length === 1 ? "" : "s"} on file:`,
+      trace: [{ tool: "list_customers", label: `Fetched <b>${custs.length}</b> customer${custs.length === 1 ? "" : "s"}` }],
+      card: { type: "customers", props: { customers: custs.map((c) => ({ ...c })) } },
+      isWrite: false,
+    };
+  }
+
+  async function planListProducts() {
+    const prods = E.PRODUCTS;
+    return {
+      intro: `Here ${prods.length === 1 ? "is" : "are"} the <b>${prods.length}</b> item${prods.length === 1 ? "" : "s"} in your catalog:`,
+      trace: [{ tool: "list_products", label: `Fetched <b>${prods.length}</b> product${prods.length === 1 ? "" : "s"}` }],
+      card: { type: "products", props: { products: prods.map((p) => ({ ...p })) } },
+      isWrite: false,
+    };
+  }
+
+  function planMessage(msg) {
+    return { intro: msg || "I can create invoices, record payments, list invoices/customers/products, pull a ledger, or look up a GSTIN — what do you need?", trace: [], card: null, isWrite: false };
+  }
+
   function planClarify(msg) {
     return { intro: msg, trace: [], card: null, isWrite: false };
   }
@@ -311,7 +516,12 @@ function App() {
 
   // ---- run one turn -----------------------------------------------------
   async function runTurn(text) {
-    const plan = await planFor(text);
+    let plan;
+    try { plan = await planFor(text); }
+    catch (e) {
+      console.error("Planning failed:", e);
+      plan = planClarify("Sorry — I couldn't work that one out. Try rephrasing, e.g. “invoice Acme ₹50,000 for consulting, 18% GST”.");
+    }
     const id = uid();
     lastAgentRef.current = id;
     setMessages((prev) => [...prev, { id, role: "agent", text: "", streaming: true, trace: [], shownTrace: 0 }]);
@@ -434,6 +644,16 @@ function App() {
     if (ok) docsRef.current = E.SEED_DOCS.map((d) => ({ ...d }));
   }
 
+  // After the Connection panel saves new settings + re-boots the engine, sync
+  // the UI to the new target: status, mode, the document cache, and any draft.
+  function onConnectionApplied() {
+    setOnline(E.online);
+    setMode(E.mode);
+    docsRef.current = E.SEED_DOCS.map((d) => ({ ...d }));
+    draftRef.current = null;
+    lastDocRef.current = null;
+  }
+
   // ---- render -----------------------------------------------------------
   const empty = messages.length === 0;
   return (
@@ -445,20 +665,30 @@ function App() {
         </div>
         <span className="pill"><span style={{ fontSize: 14 }}>🇮🇳</span> IN</span>
         {online
-          ? <span className="pill live"><span className="dot" /> Backend live</span>
+          ? <span className={"pill live" + (mode === "live" ? " real" : "")} onClick={() => setCfgOpen(true)}
+                  title="Connection settings" style={{ cursor: "pointer" }}>
+              <span className="dot" /> {mode === "live" ? "Live · Swipe account" : "Mock backend"}
+            </span>
           : <span className="pill offline" onClick={retryConnect} title="Click to retry">Backend offline</span>}
         <span className="spacer" />
+        <button className="btn ghost icon" onClick={() => setCfgOpen(true)} title="Connection / API key" aria-label="Connection settings">
+          <Ic d={["M12 15a3 3 0 100-6 3 3 0 000 6z", "M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"]} size={17} sw={2} />
+        </button>
         <button className={"btn " + (demoOn ? "" : "primary")} onClick={runDemo}>
           {demoOn ? <><Ic d={["M7 6h3v12H7zM14 6h3v12h-3z"]} size={15} sw={0} fill="currentColor" /> Stop demo</>
                   : <><Ic d={["M7 5l11 7-11 7z"]} size={15} sw={0} fill="currentColor" /> Auto-demo</>}
         </button>
       </header>
+      {cfgOpen && <ConnectionModal onClose={() => setCfgOpen(false)} onApplied={onConnectionApplied} />}
 
       <div className="stream-wrap" ref={streamRef}>
         {!online && (
           <div className="offline-banner">
-            <span>⚠ Can't reach the Swipe API at <code>{E.apiBase}</code>. Start the mock backend
-            (<code>uvicorn mock_backend.main:app</code>), then</span>
+            <span>⚠ Can't reach the Swipe API at <code>{E.apiBase}</code>.{" "}
+            {mode === "live"
+              ? "Check the backend is running and your API key is valid."
+              : <>Start the backend (<code>uvicorn mock_backend.main:app</code>), then</>}</span>
+            <button className="btn" onClick={() => setCfgOpen(true)}>Connection</button>
             <button className="btn" onClick={retryConnect}>Retry</button>
           </div>
         )}

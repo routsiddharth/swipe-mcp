@@ -1,14 +1,25 @@
-# Swipe Partner API — Mock Backend
+# Swipe Partner API — Agent + Mock Backend
 
-An offline, fully-runnable **FastAPI** mock of [Swipe's](https://getswipe.in)
-Partner API (v2), built entirely against the public OpenAPI spec
-([`spec/partner.yaml`](spec/partner.yaml)). It lets the frontend / MCP server be
-developed and demoed **without a live Swipe account or API key** — request and
-response shapes match the spec, and the GST line-item math is computed for real.
+A conversational agent for [Swipe's](https://getswipe.in) Partner API (v2) that
+runs in **two modes from one codebase**:
 
-> Status: built-to-spec. **Nothing here has been validated against the live
-> Swipe API yet** (I don't have a key). Response shapes mirror the spec; the
-> GST math is verified against the spec's own worked examples (see tests).
+- **live** — drives a **real Swipe account** against the production Partner API
+  (`https://app.getswipe.in/api/partner`) with your API key.
+- **mock** — an offline, fully-runnable **FastAPI** mock built entirely against
+  the public OpenAPI spec ([`spec/partner.yaml`](spec/partner.yaml)), so the
+  frontend / MCP server can be developed and demoed **with no Swipe account or
+  key**. Request/response shapes match the spec; the GST math is computed for real.
+
+Mock is the zero-setup default; supply a key and flip a single toggle to point
+the same agent and UI at the live API (see [Going live](#going-live-the-real-swipe-api)).
+
+> Status: the mock is built-to-spec; the GST math is verified against the spec's
+> own worked examples (see tests). The conversational frontend can also drive the
+> **real Swipe Partner API directly** (live mode) — the create-invoice, record-
+> payment, list, and ledger flows have been validated against a live account, and
+> the engine adapts to the several places where the live shapes differ from the
+> spec/mock (see `frontend/engine.js`). Live GST requires the Swipe account to
+> have its GSTIN configured, otherwise Swipe zeroes the tax.
 
 ## Quick start (~30 seconds)
 
@@ -107,14 +118,37 @@ runs end-to-end endpoint flows via FastAPI's TestClient (no network, no key).
 
 [`frontend/`](frontend/) is a one-surface demo UI: you talk to Swipe in plain
 English and an agent composes the action, shows the GST breakdown, and (on
-confirm for writes) drives this backend's API for real. It runs in the browser
-with no build step — start this backend, then serve `frontend/` over HTTP and
-open it. See [`frontend/README.md`](frontend/README.md). CORS is enabled here so
-the browser can call the API directly (configurable via `MOCK_CORS_ORIGINS`).
+confirm for writes) drives the API for real. It runs in the browser with no build
+step and works against **either mode** — in mock mode it talks to the local
+FastAPI backend; in live mode it calls `app.getswipe.in` directly with your key.
+Start the backend (mock), then serve `frontend/` over HTTP and open it. See
+[`frontend/README.md`](frontend/README.md). The mock enables CORS so the browser
+can call it directly (configurable via `MOCK_CORS_ORIGINS`).
 
-## Going live later
+## Going live (the real Swipe API)
 
-Auth and config are env-driven, so the same code can point at the real API:
+The frontend talks to the **real Partner API directly** in live mode — the Swipe
+API sends permissive CORS headers, so the browser can call `app.getswipe.in`
+without any proxy or backend in the loop. Switch via the in-app **Connection**
+panel, or set a deployment default with a git-ignored `frontend/config.js`
+(generated from an env var) so the hosted app always uses your key:
+
+```bash
+SWIPE_API_KEY=...  python scripts/gen_frontend_config.py   # writes frontend/config.js
+```
+
+Seed a live account with the demo's customers/products (and a few sample
+invoices) so the agent's prompts resolve against real data:
+
+```bash
+SWIPE_API_KEY=...  python scripts/seed_live.py          # customers + products
+SWIPE_API_KEY=...  python scripts/seed_live.py --all    # + sample invoices
+```
+
+See [`frontend/README.md`](frontend/README.md) for the full config precedence.
+The key is read from env / a git-ignored `.env`; it is never committed.
+
+### Mock-server env vars (for the offline mock)
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
@@ -123,10 +157,10 @@ Auth and config are env-driven, so the same code can point at the real API:
 | `MOCK_HOST` / `MOCK_PORT` | `127.0.0.1` / `8000` | Bind address |
 | `MOCK_CORS_ORIGINS` | `*` | Comma-separated allowed browser origins |
 
-> ⚠️ The defaults are tuned for a zero-setup local demo: CORS is open (`*`) and
-> any non-empty token is accepted. If you deploy this mock anywhere public, set
-> `MOCK_CORS_ORIGINS` to your frontend's origin and `MOCK_API_TOKEN` to a real
-> token — otherwise the mock is world-writable.
+> ⚠️ The mock's defaults are tuned for a zero-setup local demo: CORS is open
+> (`*`) and any non-empty token is accepted. If you deploy the *mock* anywhere
+> public, set `MOCK_CORS_ORIGINS` and `MOCK_API_TOKEN` — otherwise it's
+> world-writable.
 
 ## Layout
 
