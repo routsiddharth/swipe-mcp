@@ -6,7 +6,7 @@
 #   MOCK_API_TOKEN=<random>           shared secret for mock-mode calls
 #   OPENROUTER_API_KEY=sk-or-v1-...   enables the server-side /llm agent
 #   MOCK_CORS_ORIGINS=https://<your-vercel-app>   lock CORS to the frontend
-app = "swipe-mock"
+app = "swipe-mcp-mock"
 primary_region = "sin"   # Singapore — closest Fly region to India
 
 [build]

@@ -13,5 +13,8 @@ CLAUDE.md
 # Local deployment notes — not part of the published artifact
 DEPLOYMENT.md
 
-# Generated frontend deployment config — holds the API key (secret)
+# Generated at deploy time (scripts/gen_config.mjs / gen_frontend_config.py).
+# Holds only non-secret deploy settings now, but stays generated, not committed.
 frontend/config.js
+# Vercel CLI local link/credentials
+.vercel
