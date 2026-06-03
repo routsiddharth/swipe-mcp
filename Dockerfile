@@ -13,6 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY mock_backend ./mock_backend
 COPY spec ./spec
 
-ENV MOCK_HOST=0.0.0.0 MOCK_PORT=8000 MOCK_REQUIRE_AUTH=true
+# Auth is off by default (the mock serves only fake seed data). To mirror the
+# real API's bearer-auth flow, set MOCK_REQUIRE_AUTH=true (+ optional
+# MOCK_API_TOKEN) as a runtime env/secret.
+ENV MOCK_HOST=0.0.0.0 MOCK_PORT=8000
 EXPOSE 8000
 CMD ["uvicorn", "mock_backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

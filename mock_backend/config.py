@@ -22,10 +22,14 @@ def _origins() -> List[str]:
 
 @dataclass(frozen=True)
 class Settings:
-    # Require an `Authorization: Bearer <token>` header (mirrors the real API).
-    require_auth: bool = _flag("MOCK_REQUIRE_AUTH", True)
-    # If set, only this exact token is accepted. If empty, ANY non-empty bearer
-    # token is accepted — convenient for local dev/demo.
+    # Whether to enforce an `Authorization: Bearer <token>` header. OFF by
+    # default: the mock serves only fake, resettable seed data, so there's
+    # nothing to protect (the user's real Swipe key never touches this backend).
+    # Flip on with MOCK_REQUIRE_AUTH=true to mirror the real API's auth flow
+    # (e.g. when exercising the same client code against live Swipe).
+    require_auth: bool = _flag("MOCK_REQUIRE_AUTH", False)
+    # If auth is enabled and this is set, only this exact token is accepted. If
+    # empty, ANY non-empty bearer token is accepted — convenient for dev/demo.
     api_token: str = os.getenv("MOCK_API_TOKEN", "")
     host: str = os.getenv("MOCK_HOST", "127.0.0.1")
     port: int = int(os.getenv("MOCK_PORT", "8000"))

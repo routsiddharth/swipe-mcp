@@ -14,8 +14,22 @@ def client():
     return c
 
 
-def test_requires_auth(client):
+def test_no_auth_required_by_default(client):
+    # Auth is off by default — the mock serves fake seed data, so a tokenless
+    # request succeeds.
     r = client.get("/v2/customer/list")
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+
+def test_auth_enforced_when_enabled(monkeypatch):
+    # The bearer-auth flow still exists for the live-fidelity path; flipping the
+    # toggle on must reject a tokenless request with the spec's envelope.
+    from mock_backend import auth
+    from mock_backend.config import Settings
+
+    monkeypatch.setattr(auth, "settings", Settings(require_auth=True))
+    r = TestClient(app).get("/v2/customer/list")
     assert r.status_code == 401
     assert r.json()["error_code"] == "UNAUTHORIZED"
 
