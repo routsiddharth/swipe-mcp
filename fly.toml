@@ -1,0 +1,31 @@
+# Fly.io config for the mock backend. Rename `app` to something globally unique
+# before `fly launch --no-deploy` (the same name becomes <app>.fly.dev — keep it
+# in sync with the CSP connect-src in vercel.json).
+#
+# Secrets (NOT here — set with `fly secrets set`):
+#   MOCK_API_TOKEN=<random>           shared secret for mock-mode calls
+#   OPENROUTER_API_KEY=sk-or-v1-...   enables the server-side /llm agent
+#   MOCK_CORS_ORIGINS=https://<your-vercel-app>   lock CORS to the frontend
+app = "swipe-mock"
+primary_region = "sin"   # Singapore — closest Fly region to India
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0   # scale-to-zero; ~1s cold start. Set 1 to persist the in-memory store.
+
+  [[http_service.checks]]
+    path = "/health"         # app exposes this unauthenticated
+    method = "get"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

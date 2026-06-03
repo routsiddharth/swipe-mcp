@@ -7,6 +7,7 @@ payment status — mirroring what the real Swipe backend does server-side.
 from __future__ import annotations
 
 import copy
+from datetime import datetime
 from typing import Optional
 
 from . import gst, ids
@@ -27,6 +28,35 @@ def paginate(items: list, page=1, num_records="10") -> list:
         p = 1
     start = (p - 1) * n
     return items[start:start + n]
+
+
+def parse_date(date_str: Optional[str]) -> Optional[datetime]:
+    """Parse a DD-MM-YYYY string; return None on anything unparseable."""
+    if not date_str:
+        return None
+    try:
+        return datetime.strptime(date_str, "%d-%m-%Y")
+    except (TypeError, ValueError):
+        return None
+
+
+def filter_by_date_range(items: list, start_date, end_date, field: str) -> list:
+    """Keep items whose `field` (a DD-MM-YYYY string) falls in [start, end].
+
+    Inclusive on both ends; either bound may be omitted. An item whose date is
+    missing or unparseable is kept (matching the routers' prior behaviour).
+    """
+    start, end = parse_date(start_date), parse_date(end_date)
+    if start is None and end is None:
+        return list(items)
+
+    def in_range(item: dict) -> bool:
+        dt = parse_date(item.get(field))
+        if dt is None:
+            return True
+        return (start is None or dt >= start) and (end is None or dt <= end)
+
+    return [item for item in items if in_range(item)]
 
 
 # --------------------------------------------------------------------------- #
@@ -272,6 +302,54 @@ def document_detail(store, doc: dict) -> dict:
     return view
 
 
+def get_document(store, hash_id: str) -> dict:
+    """Fetch a document or raise INVALID_HASH_ID (the one place that knows the code)."""
+    doc = store.documents.get(hash_id)
+    if not doc:
+        raise SwipeError("INVALID_HASH_ID", f"No document with hash id {hash_id}.", status_code=404)
+    return doc
+
+
+def query_documents(store, *, document_type: str, payment_status: str = "all",
+                    customer_id: Optional[str] = None, start_date=None, end_date=None) -> list:
+    """Filtered, date-sorted documents for /v2/doc/list (pagination is the caller's job)."""
+    docs = [d for d in store.documents.values() if d["document_type"] == document_type]
+    if customer_id:
+        docs = [d for d in docs if d["party"]["id"] == customer_id]
+    if payment_status and payment_status != "all":
+        docs = [d for d in docs if d["payment_status"] == payment_status]
+    docs = filter_by_date_range(docs, start_date, end_date, "document_date")
+    docs.sort(key=lambda d: parse_date(d["document_date"]) or datetime.min)
+    return docs
+
+
+def replace_document(store, hash_id: str, data: dict) -> dict:
+    """Edit a document: build the replacement FIRST, then atomically swap.
+
+    If the build raises (bad tax rate, over-payment, ...) the original document
+    is left completely untouched — no partial write. The replacement keeps the
+    original's hash id and serial number.
+    """
+    old = get_document(store, hash_id)
+    data = dict(data)
+    # Let the new doc auto-assign a serial so it doesn't collide with the still
+    # present original via the duplicate-serial guard; restore it after success.
+    data.pop("serial_number", None)
+    new = build_document(store, data)
+
+    for pid in old["payments"]:
+        store.payments.pop(pid, None)
+    del store.documents[hash_id]
+    store.documents.pop(new["hash_id"], None)
+    new["hash_id"] = hash_id
+    new["serial_number"] = old["serial_number"]
+    for pid in new["payments"]:
+        store.payments[pid]["document_hash_id"] = hash_id
+        store.payments[pid]["document_serial_number"] = old["serial_number"]
+    store.documents[hash_id] = new
+    return new
+
+
 # --------------------------------------------------------------------------- #
 # Payments
 # --------------------------------------------------------------------------- #
@@ -344,6 +422,235 @@ def record_payment(store, data: dict) -> dict:
     doc["amount_pending"] = gst.money(max(doc["total_amount"] - new_paid, 0))
     doc["payment_status"] = _payment_status(doc["total_amount"], new_paid, False)
     return rec
+
+
+def payment_view(p: dict) -> dict:
+    """GetPaymentV2 shape used by /v2/payment/list."""
+    return {
+        "payment_id": p["payment_id"],
+        "amount": p["amount"],
+        "method": p["method"],
+        "payment_date": p["payment_date"],
+        "customer_name": p.get("customer_name"),
+        "customer_id": p.get("customer_id"),
+        "document_serial_number": p.get("document_serial_number"),
+        "notes": p.get("notes"),
+    }
+
+
+def query_payments(store, *, customer_id: Optional[str] = None,
+                   start_date=None, end_date=None) -> list:
+    """Filtered payments for /v2/payment/list (pagination is the caller's job)."""
+    payments = list(store.payments.values())
+    if customer_id:
+        payments = [p for p in payments if p.get("customer_id") == customer_id]
+    return filter_by_date_range(payments, start_date, end_date, "payment_date")
+
+
+# --------------------------------------------------------------------------- #
+# Customers / Vendors CRUD (all store access goes through here, not the routers)
+# --------------------------------------------------------------------------- #
+def _party_record(data: dict, id_key: str) -> dict:
+    pid = data[id_key]
+    return {
+        id_key: pid,
+        "name": data["name"],
+        "phone": data.get("phone"),
+        "email": data.get("email"),
+        "gstin": data.get("gstin"),
+        "company_name": data.get("company_name"),
+        "billing_address": data.get("billing_address") or [],
+        "shipping_address": data.get("shipping_address") or [],
+        "balance": data.get("opening_balance", 0.0),
+    }
+
+
+def list_customers(store, *, search: Optional[str] = None,
+                   customer_id: Optional[str] = None) -> list:
+    records = list(store.customers.values())
+    if customer_id:
+        records = [c for c in records if c["customer_id"] == customer_id]
+    if search:
+        s = search.lower()
+        records = [c for c in records if s in (c["name"] or "").lower()
+                   or s in (c.get("company_name") or "").lower()]
+    return records
+
+
+def get_customer(store, customer_id: str) -> dict:
+    cust = store.customers.get(customer_id)
+    if not cust:
+        raise SwipeError("CUSTOMER_NOT_FOUND", f"Customer {customer_id} not found.", 404)
+    return cust
+
+
+def add_customer(store, data: dict) -> dict:
+    cid = data["customer_id"]
+    if cid in store.customers:
+        raise SwipeError("BAD_REQUEST", f"Customer {cid} already exists.")
+    store.customers[cid] = _party_record(data, "customer_id")
+    return {"customer_id": cid}
+
+
+def update_customer(store, data: dict) -> dict:
+    cid = data["customer_id"]
+    existing = get_customer(store, cid)
+    existing.update(
+        {
+            "name": data["name"],
+            "phone": data.get("phone"),
+            "email": data.get("email"),
+            "gstin": data.get("gstin"),
+            "company_name": data.get("company_name"),
+        }
+    )
+    if data.get("billing_address"):
+        existing["billing_address"] = data["billing_address"]
+    if data.get("shipping_address"):
+        existing["shipping_address"] = data["shipping_address"]
+    return {"customer_id": cid}
+
+
+def delete_customer(store, customer_id: str) -> dict:
+    get_customer(store, customer_id)
+    del store.customers[customer_id]
+    return {"customer_id": customer_id}
+
+
+def list_vendors(store, *, search: Optional[str] = None) -> list:
+    records = list(store.vendors.values())
+    if search:
+        s = search.lower()
+        records = [v for v in records if s in (v["name"] or "").lower()]
+    return records
+
+
+def get_vendor(store, vendor_id: str) -> dict:
+    vendor = store.vendors.get(vendor_id)
+    if not vendor:
+        raise SwipeError("BAD_REQUEST", f"Vendor {vendor_id} not found.", 404)
+    return vendor
+
+
+def add_vendor(store, data: dict) -> dict:
+    vid = data["vendor_id"]
+    if vid in store.vendors:
+        raise SwipeError("BAD_REQUEST", f"Vendor {vid} already exists.")
+    store.vendors[vid] = _party_record(data, "vendor_id")
+    return {"vendor_id": vid}
+
+
+def delete_vendor(store, vendor_id: str) -> dict:
+    get_vendor(store, vendor_id)
+    del store.vendors[vendor_id]
+    return {"vendor_id": vendor_id}
+
+
+# --------------------------------------------------------------------------- #
+# Products / Inventory CRUD
+# --------------------------------------------------------------------------- #
+def product_record(p: dict) -> dict:
+    """ItemListRecord shape returned by the product read endpoints."""
+    return {
+        "item_id": p["item_id"],
+        "name": p["name"],
+        "selling_price": p["selling_price"],
+        "purchase_price": p.get("purchase_price", 0),
+        "tax_rate": p.get("tax_rate", 0),
+        "cess_rate": p.get("cess_rate", 0),
+        "unit": p.get("unit"),
+        "hsn_code": p.get("hsn_code"),
+        "item_type": p.get("item_type", "Product"),
+        "stock": p.get("stock", 0),
+    }
+
+
+def list_products(store, *, search: Optional[str] = None) -> list:
+    records = [product_record(p) for p in store.products.values()]
+    if search:
+        s = search.lower()
+        records = [r for r in records if s in (r["name"] or "").lower()]
+    return records
+
+
+def get_product(store, item_id: str) -> dict:
+    p = store.products.get(item_id)
+    if not p:
+        raise SwipeError("ITEM_NOT_FOUND", f"Item {item_id} not found.", 404)
+    return product_record(p)
+
+
+def add_product(store, data: dict) -> dict:
+    iid = data["item_id"]
+    if iid in store.products:
+        raise SwipeError("PRODUCT_ALREADY_EXISTS", f"Item {iid} already exists.")
+    store.products[iid] = {
+        "item_id": iid,
+        "name": data["name"],
+        "selling_price": data["selling_price"],
+        "purchase_price": data.get("purchase_price", 0.0),
+        "tax_rate": data.get("tax_rate", 0.0),
+        "cess_rate": data.get("cess_rate", 0.0),
+        "unit": data.get("unit"),
+        "hsn_code": data.get("hsn_code"),
+        "item_type": data.get("item_type", "Product"),
+        "stock": data.get("opening_stock", 0.0),
+    }
+    return {"item_id": iid}
+
+
+def update_product(store, data: dict) -> dict:
+    iid = data["item_id"]
+    existing = store.products.get(iid)
+    if not existing:
+        raise SwipeError("ITEM_NOT_FOUND", f"Item {iid} not found.", 404)
+    existing.update(
+        {
+            "name": data["name"],
+            "selling_price": data["selling_price"],
+            "purchase_price": data.get("purchase_price", 0.0),
+            "tax_rate": data.get("tax_rate", 0.0),
+            "cess_rate": data.get("cess_rate", 0.0),
+            "unit": data.get("unit"),
+            "hsn_code": data.get("hsn_code"),
+            "item_type": data.get("item_type", "Product"),
+        }
+    )
+    return {"item_id": iid}
+
+
+def delete_product(store, item_id: str) -> dict:
+    if item_id not in store.products:
+        raise SwipeError("ITEM_NOT_FOUND", f"Item {item_id} not found.", 404)
+    del store.products[item_id]
+    return {"item_id": item_id}
+
+
+def adjust_stock(store, *, item_id: str, quantity: float, type: str = "in") -> dict:
+    product = store.products.get(item_id)
+    if not product:
+        raise SwipeError("ITEM_NOT_FOUND", f"Item {item_id} not found.", 404)
+    delta = quantity if type == "in" else -quantity
+    new_stock = product.get("stock", 0) + delta
+    if new_stock < 0:
+        raise SwipeError("INSUFFICIENT_STOCK", "Stock cannot go below zero.")
+    product["stock"] = new_stock
+    return {"item_id": item_id, "stock": new_stock}
+
+
+def list_warehouses(store) -> list:
+    return store.warehouses
+
+
+def list_subscriptions(store) -> list:
+    return list(store.subscriptions.values())
+
+
+def get_subscription(store, subscription_hash_id: str) -> dict:
+    sub = store.subscriptions.get(subscription_hash_id)
+    if not sub:
+        raise SwipeError("SUBSCRIPTION_DETAILS_NOT_FOUND", "Subscription not found.", 404)
+    return sub
 
 
 # --------------------------------------------------------------------------- #

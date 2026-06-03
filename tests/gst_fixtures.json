@@ -1,0 +1,52 @@
+[
+  {
+    "name": "spec-advanced-intra-state",
+    "seller_state": "TELANGANA",
+    "customer_state": "TELANGANA",
+    "lines": [
+      { "quantity": 10, "unit_price": 100, "tax_rate": 18, "cess_rate": 10, "discount_percent": 10 }
+    ]
+  },
+  {
+    "name": "spec-advanced-inter-state",
+    "seller_state": "TELANGANA",
+    "customer_state": "KARNATAKA",
+    "lines": [
+      { "quantity": 10, "unit_price": 100, "tax_rate": 18, "cess_rate": 10, "discount_percent": 10 }
+    ]
+  },
+  {
+    "name": "einvoice-flat-discount-inter-state",
+    "seller_state": "TELANGANA",
+    "customer_state": "MAHARASHTRA",
+    "lines": [
+      { "quantity": 1, "unit_price": 100, "tax_rate": 18, "discount_amount": 10 }
+    ]
+  },
+  {
+    "name": "multi-line-mixed-rates-intra-state",
+    "seller_state": "KARNATAKA",
+    "customer_state": "KARNATAKA",
+    "lines": [
+      { "quantity": 3, "unit_price": 250, "tax_rate": 18 },
+      { "quantity": 2, "unit_price": 1000, "tax_rate": 12, "discount_percent": 5 },
+      { "quantity": 5, "unit_price": 40, "tax_rate": 0 }
+    ]
+  },
+  {
+    "name": "consulting-50k-inter-state",
+    "seller_state": "TELANGANA",
+    "customer_state": "DELHI",
+    "lines": [
+      { "quantity": 20, "unit_price": 2500, "tax_rate": 18 }
+    ]
+  },
+  {
+    "name": "discount-clamped-to-line-value",
+    "seller_state": "GUJARAT",
+    "customer_state": "GUJARAT",
+    "lines": [
+      { "quantity": 1, "unit_price": 100, "tax_rate": 18, "discount_amount": 150 }
+    ]
+  }
+]

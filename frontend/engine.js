@@ -59,46 +59,37 @@
   function activeTok() { return isLive() ? CFG.liveTok : "demo"; }
   function readConfig() {
     var qs = new URLSearchParams(location.search);
-    // Deployment config (window.SWIPE_*, set by config.js from a host env var)
-    // is authoritative — it represents "always use my key". A query param can
-    // still override per-request; localStorage is only a local-session fallback.
-    var envTok = window.SWIPE_API_TOKEN || "";
-    var qsTok = qs.get("token") || "";
+    // SECURITY / by-design: the Swipe API key is NEVER imported on boot — not
+    // from config.js, not from a host env var, not from a query param. It exists
+    // only after the user enters it in the Connection panel AND it validates
+    // against the live API; it is then persisted in localStorage on THIS device.
+    // So the only source here is localStorage, and a clean install starts with
+    // no key (→ key-free mock demo).
     var lsTok = localStorage.getItem("swipe_api_token") || "";
-    // Bias toward LIVE: whenever a real key is on hand we drive the actual Swipe
-    // API — mock is meant to be reached only as the automatic fallback when the
-    // live quota is spent (or as the genuinely key-free local demo). Precedence:
-    // an explicit ?mode= / config.js mode wins; an injected (config.js) or
-    // per-request (?token=) key implies live; then an explicit saved choice;
-    // then any saved key implies live; finally mock when there's no key at all.
-    var mode =
-      qs.get("mode") ||
-      window.SWIPE_MODE ||
-      ((envTok || qsTok) ? "live" : "") ||   // an injected / explicit key implies live
-      localStorage.getItem("swipe_mode") ||  // honour an explicit saved choice
-      (lsTok ? "live" : "") ||               // a saved key → default to live
-      "mock";                                // no key anywhere → key-free mock demo
+    // Mode is the user's last explicit choice; with no saved key we stay on the
+    // mock. A stale "live" with no key downgrades to mock (can't go live keyless).
+    var mode = localStorage.getItem("swipe_mode") || "mock";
+    if (mode === "live" && !lsTok) mode = "mock";
     var backend =
-      window.SWIPE_API_BASE ||
+      window.SWIPE_API_BASE ||                 // the MOCK backend URL (not a secret)
       localStorage.getItem("swipe_backend") ||
       "http://127.0.0.1:8000";
     // SECURITY: in live mode the base is ALWAYS the real Swipe host — never an
-    // attacker-supplied ?api= (or a stale localStorage swipe_api_base). The
-    // bearer token in live mode is the real Swipe API key; honouring an
-    // override there would let a crafted link (e.g. ?api=https://evil) redirect
-    // that key to an attacker's origin on boot. The ?api= escape hatch is a
-    // mock-only convenience (token is the worthless "demo") for pointing the
-    // demo at a self-hosted mock backend.
+    // attacker-supplied ?api= (or a stale localStorage swipe_api_base), which
+    // would let a crafted link redirect the key to an attacker origin. The ?api=
+    // escape hatch is a mock-only convenience (token is the worthless "demo").
     var override = mode === "live" ? "" : (qs.get("api") || localStorage.getItem("swipe_api_base"));
-    // The real Swipe key — used only for live calls and live-reset probes. We
-    // keep it around even in a degraded session (which actively serves "demo"
-    // against the mock) so we can still poll the real API for a quota reset.
-    var liveTok = qsTok || envTok || lsTok || "";
+    // The real Swipe key — used only for live calls and live-reset probes. Kept
+    // even in a degraded session (which serves "demo" against the mock) so we
+    // can still poll the real API for a quota reset.
+    var liveTok = lsTok;
     var tok = mode === "live" ? liveTok : "demo";
     var base = override ? override : deriveBase(mode, backend);
-    // OpenRouter LLM (the agent's brain). Key/model come from config.js (env)
-    // or query params; absent → the deterministic regex NLU is used instead.
-    var llmKey = qs.get("llm_key") || window.OPENROUTER_API_KEY || localStorage.getItem("openrouter_key") || "";
+    // OpenRouter LLM (the agent's brain). The KEY is server-side now — held by
+    // the backend's /llm proxy, never in the browser (see engine.js llmPlan and
+    // routers/llm.py). Enablement + model come from the /llm/status probe at
+    // boot; this is only a client-side fallback model name. Absent server key →
+    // the deterministic regex NLU is used instead.
     var llmModel = qs.get("llm_model") || window.OPENROUTER_MODEL || localStorage.getItem("openrouter_model") || "openai/gpt-4o-mini";
     // Seller's own state/GSTIN. The live API has no company endpoint, so the
     // CGST/SGST-vs-IGST split can't be derived from it — the deploy must supply
@@ -110,7 +101,7 @@
     return {
       mode: mode, backend: backend.replace(/\/+$/, ""), base: base.replace(/\/+$/, ""),
       tok: tok, liveTok: liveTok,
-      llmKey: llmKey, llmModel: llmModel,
+      llmModel: llmModel,
       sellerState: normState(sellerState), sellerGstin: sellerGstin,
     };
   }
@@ -347,105 +338,14 @@
 
   // ---- LLM planner (OpenRouter) ------------------------------------------ //
   // The real "agent": an LLM reads the message + the live catalog and emits ONE
-  // tool call (which the app then previews/executes). Falls back to classify()
-  // when no key is configured, so the demo still runs key-free.
-  var LLM_TOOLS = [
-    {
-      type: "function",
-      function: {
-        name: "create_invoice",
-        description: "Compose an invoice for a customer. Resolve the customer to an id from the catalog. One entry per line item; unit_price is per-unit and TAX-EXCLUSIVE.",
-        parameters: {
-          type: "object",
-          properties: {
-            customer_id: { type: "string", description: "Customer id from the catalog (e.g. CUST002)." },
-            customer_name: { type: "string", description: "Customer name if no id matches (a new party)." },
-            items: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  item_id: { type: "string", description: "Catalog item id if it matches one." },
-                  name: { type: "string" },
-                  quantity: { type: "number" },
-                  unit_price: { type: "number", description: "Per-unit price excluding tax." },
-                  tax_rate: { type: "number", description: "GST % (e.g. 18). Default 18 if unstated." },
-                  cess_rate: { type: "number" },
-                  discount_percent: { type: "number" },
-                  item_type: { type: "string", enum: ["Product", "Service"] },
-                },
-                required: ["name", "quantity", "unit_price", "tax_rate"],
-              },
-            },
-            due_days: { type: "number", description: "Days until due (default 30)." },
-          },
-          required: ["items"],
-        },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "record_payment",
-        description: "Record a payment against an invoice. 'document_ref' can be an invoice serial (INV-12) or 'last' for the most recent.",
-        parameters: {
-          type: "object",
-          properties: {
-            amount: { type: "number" },
-            method: { type: "string", enum: ["upi", "cash", "card", "cheque", "emi", "netBanking"] },
-            document_ref: { type: "string" },
-          },
-          required: ["amount"],
-        },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "list_invoices",
-        description: "List/search invoices by payment status.",
-        parameters: {
-          type: "object",
-          properties: { status: { type: "string", enum: ["all", "unpaid", "paid", "overdue"] } },
-        },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "customer_outstanding",
-        description: "Show a customer's outstanding balance and ledger.",
-        parameters: {
-          type: "object",
-          properties: { customer_id: { type: "string" }, customer_name: { type: "string" } },
-        },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "lookup_gstin",
-        description: "Look up / validate a 15-character GSTIN against the GST registry.",
-        parameters: { type: "object", properties: { gstin: { type: "string" } }, required: ["gstin"] },
-      },
-    },
-    {
-      type: "function",
-      function: { name: "list_customers", description: "List all customers on the account.", parameters: { type: "object", properties: {} } },
-    },
-    {
-      type: "function",
-      function: { name: "list_products", description: "List all products/items in the catalog.", parameters: { type: "object", properties: {} } },
-    },
-    {
-      type: "function",
-      function: {
-        name: "reply",
-        description: "Answer a greeting, a general question, or explain what you can do — when no other tool fits.",
-        parameters: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
-      },
-    },
-  ];
+  // tool call, which the app then dispatches through window.SwipeTools (the tool
+  // registry — the single home for each tool's schema, handler and trace). The
+  // tool *schemas* the model sees come from there too; this module no longer
+  // keeps its own copy. Falls back to classify() when no key is configured, so
+  // the demo still runs key-free.
+  function llmTools() {
+    return (window.SwipeTools && window.SwipeTools.schemas()) || [];
+  }
 
   function buildSystemPrompt(ctx) {
     var custs = CUSTOMERS.map(function (c) {
@@ -486,16 +386,17 @@
       if (h && h.text) messages.push({ role: h.role === "user" ? "user" : "assistant", content: h.text });
     });
     messages.push({ role: "user", content: String(text) });
-    return fetch("https://openrouter.ai/api/v1/chat/completions", {
+    // The OpenRouter key lives only on the backend. We POST to its /llm proxy,
+    // which injects the key server-side — so it never ships to the browser. No
+    // Authorization header here by design (and in live mode we must NOT send the
+    // Swipe key to this origin). The proxy passes OpenRouter's body through
+    // verbatim, so the response parsing below is unchanged.
+    return fetch(mockBase() + "/llm", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer " + CFG.llmKey,
-        "X-Title": "Swipe Agent",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: CFG.llmModel, messages: messages,
-        tools: LLM_TOOLS, tool_choice: "auto", temperature: 0,
+        model: Engine.llmModel || CFG.llmModel, messages: messages,
+        tools: llmTools(), tool_choice: "auto", temperature: 0,
       }),
     }).then(function (res) {
       return res.json().then(function (data) {
@@ -713,6 +614,31 @@
     });
   }
   function apiGet(path) { return apiCall("GET", path); }
+
+  // Validate a Swipe key with the MINIMUM possible call (one customer record)
+  // against the real API, using the supplied token directly — without changing
+  // the active connection. Resolves { ok:true } or { ok:false, error } with a
+  // user-facing message (invalid key vs. limit reached vs. unreachable). This is
+  // the gate before we ever switch the app to live.
+  function validateLiveKey(token) {
+    token = String(token || "").trim();
+    if (!token) return Promise.resolve({ ok: false, error: "Enter your Swipe API key." });
+    return rawCall("GET", "/v2/customer/list?page=1&num_records=1", null, LIVE_API, token)
+      .then(function () { return { ok: true }; })
+      .catch(function (err) {
+        var code = (err && err.code) || "";
+        var msg = (err && err.message) || "";
+        var error;
+        if (err && err.rateLimited) {
+          error = "Daily limit reached on this key. Try again after it resets, or email api@getswipe.in for more credits.";
+        } else if (/unauthor|invalid token|token format|forbidden/i.test(code + " " + msg)) {
+          error = "Invalid or unauthorized API key.";
+        } else {
+          error = msg ? ("Couldn't validate the key — " + msg) : "Couldn't reach Swipe to validate the key.";
+        }
+        return { ok: false, error: error };
+      });
+  }
 
   var DOC_QUERY = "document_type=invoice&start_date=01-01-2000&end_date=31-12-2099&payment_status=all&num_records=100";
 
@@ -966,7 +892,23 @@
     });
   }
 
+  // Whether the agent's LLM brain is available is now a SERVER fact (the
+  // OpenRouter key lives on the backend, not in the browser). Probe the proxy's
+  // status endpoint and reflect it on the Engine; on any failure we leave the
+  // LLM off and the deterministic regex NLU takes over. Fire-and-forget — it
+  // doesn't gate the connection state, and resolves well before the first turn.
+  function probeLLM() {
+    return fetch(mockBase() + "/llm/status")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) {
+        Engine.llmEnabled = !!(s && s.enabled);
+        if (s && s.model) Engine.llmModel = s.model;
+      })
+      .catch(function () { Engine.llmEnabled = false; });
+  }
+
   function boot() {
+    probeLLM();
     // `_mock/company` is a mock-only convenience; the live API has no company
     // endpoint. In live mode the seller identity comes from config (if set),
     // else stays at the default and the intra/inter split is flagged assumed.
@@ -1120,7 +1062,9 @@
     // formatting + sanitization
     formatINR: formatINR, fmtDate: fmtDate, addDays: addDays, safeHtml: safeHtml, escapeHtml: escapeHtml,
     // NLU + LLM planner
-    classify: classify, llmPlan: llmPlan, llmEnabled: !!CFG.llmKey, llmModel: CFG.llmModel,
+    // llmEnabled is set by probeLLM() at boot from the backend's /llm/status —
+    // the key is server-side now, so the browser can't know it up front.
+    classify: classify, llmPlan: llmPlan, llmEnabled: false, llmModel: CFG.llmModel,
     findCustomer: findCustomer, findCustomerById: findCustomerById, findProduct: findProduct,
     parseAmount: parseAmount, parseGst: parseGst, parseDueDays: parseDueDays,
     parseMethod: parseMethod, describeItem: describeItem, GSTIN_RE: GSTIN_RE,
@@ -1130,6 +1074,7 @@
     createInvoice: createInvoice, recordPayment: recordPayment, listInvoices: listInvoices,
     refreshDocs: refreshDocs, ledger: ledger, lookupGstin: lookupGstin,
     reconnect: reconnect, resetBackend: resetBackend, configure: configure,
+    validateLiveKey: validateLiveKey,
     maybeProbeLive: maybeProbeLive, resumeLive: resumeLive, stayOnMock: stayOnMock,
   };
   window.SwipeEngine = Engine;

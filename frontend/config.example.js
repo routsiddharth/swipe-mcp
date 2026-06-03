@@ -1,31 +1,36 @@
 /* ============================================================================
    Swipe Agent — deployment config (TEMPLATE)
    ----------------------------------------------------------------------------
-   Copy this to `config.js` and fill in your key, OR generate it from an
-   environment variable at deploy time:
+   Copy this to `config.js`, OR generate it at deploy time:
 
-       SWIPE_API_KEY=... python scripts/gen_frontend_config.py
+       python scripts/gen_frontend_config.py
 
-   `config.js` is git-ignored (it holds a secret). `index.html` loads it before
-   engine.js; whatever it sets here becomes the default the app boots with, so
-   the agent always uses your key without anyone pasting it into the UI.
+   `config.js` is git-ignored. `index.html` loads it before engine.js.
 
-   Leaving config.js absent is fine — the app falls back to the in-app
-   Connection panel / mock mode.
+   ⚠️ The Swipe API key is intentionally NOT set here. By design the key is
+   entered by the user in the in-app Connection panel, validated against the live
+   API with a single call, and then stored ONLY in that user's browser
+   (localStorage). Nothing imports a Swipe key on boot — a clean load starts on
+   the key-free mock.
 
-   ⚠️ SECURITY: this file ships to the browser, so EVERY value below is publicly
-   readable by anyone who loads the page (view-source / network tab). Fine for a
-   single-account demo; for anything public, proxy the keys through a backend.
+   ⚠️ SECURITY: anything you DO set below ships to the browser and is publicly
+   readable (view-source / network tab). Do not put the Swipe key here.
 ============================================================================ */
-// Your Swipe Partner API key (from Swipe dashboard → API Integration).
-window.SWIPE_API_TOKEN = "PASTE_YOUR_SWIPE_API_KEY_HERE";
-// "live" drives your real Swipe account; "mock" uses the local FastAPI mock.
-window.SWIPE_MODE = "live";
-// Your business's state — needed for a correct CGST/SGST-vs-IGST split in live
-// mode (the live API has no company endpoint to read it from). Optional; if
-// omitted the invoice card flags the split as assumed.
-window.SWIPE_SELLER_STATE = "TELANGANA";
-// OpenRouter key — enables the LLM agent (natural-language → tool calls).
-// Without it, the app falls back to the built-in regex intent matcher.
-window.OPENROUTER_API_KEY = "PASTE_YOUR_OPENROUTER_KEY_HERE";
-window.OPENROUTER_MODEL = "openai/gpt-4o-mini";
+
+// Optional: URL of the mock backend (NOT a secret). Defaults to localhost.
+// window.SWIPE_API_BASE = "https://your-mock-backend.example.com";
+
+// Optional: your business's state — needed for a correct CGST/SGST-vs-IGST
+// split in live mode (the live API has no company endpoint to read it from).
+// window.SWIPE_SELLER_STATE = "TELANGANA";
+
+// The LLM agent (natural-language → tool calls) is enabled SERVER-SIDE: set
+// OPENROUTER_API_KEY (and optional OPENROUTER_MODEL) in the BACKEND's
+// environment. The backend's /llm proxy holds the key and the frontend
+// discovers availability via /llm/status — so no LLM key is ever set here or
+// shipped to the browser. Without a server key, the app falls back to the
+// built-in regex intent matcher.
+//
+// Optional: override the model name the frontend sends (the backend's
+// OPENROUTER_MODEL normally wins via /llm/status; this is just a fallback).
+// window.OPENROUTER_MODEL = "openai/gpt-4o-mini";

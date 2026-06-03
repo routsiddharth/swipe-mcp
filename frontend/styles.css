@@ -126,8 +126,11 @@ body {
 }
 .pill.live { background: var(--green); }
 .pill.offline { background: var(--pink); cursor: pointer; }
+/* Red "Mock Backend" indicator (also used for a degraded live→mock session). */
+.pill.mock { background: var(--pink); }
 .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #1faa5b; box-shadow: 0 0 0 3px color-mix(in oklab, #1faa5b 30%, transparent); }
 .pill.live .dot { animation: pulse 1.6s infinite; }
+.pill.mock .dot { background: #d6435f; box-shadow: 0 0 0 3px color-mix(in oklab, #d6435f 30%, transparent); animation: none; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 .spacer { flex: 1; }
 
@@ -223,12 +226,6 @@ body {
 .cfg-key { display: flex; gap: 8px; align-items: stretch; }
 .cfg-key .cfg-field { flex: 1; min-width: 0; }
 .cfg-eye { flex: 0 0 auto; font-size: 13px; padding: 8px 12px; }
-.cfg-adv-toggle {
-  appearance: none; border: 0; background: transparent; color: var(--ink-soft);
-  font-family: var(--font-body); font-weight: 700; font-size: 12.5px;
-  padding: 2px 0; cursor: pointer; text-align: left; align-self: flex-start;
-}
-.cfg-adv-toggle:hover { color: var(--ink); }
 .cfg-note {
   font-size: 13px; font-weight: 600; padding: 9px 12px; border-radius: 10px;
   border: var(--bw) solid var(--line);

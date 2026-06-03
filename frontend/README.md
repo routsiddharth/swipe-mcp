@@ -81,16 +81,16 @@ your key there once and the app boots straight into live mode with no UI typing:
 window.SWIPE_API_TOKEN = "eyJhbGciOiJI…";   // your Swipe key
 window.SWIPE_MODE = "live";
 window.SWIPE_SELLER_STATE = "TELANGANA";    // your state — for the CGST/SGST vs IGST split
-window.OPENROUTER_API_KEY = "sk-or-v1-…";   // enables the LLM agent (optional)
-window.OPENROUTER_MODEL = "openai/gpt-4o-mini";
 ```
 
-> ⚠️ **Security:** `config.js` is served to the browser, so every value in it —
-> **including both API keys** — is readable by anyone who loads the page
-> (view-source / the network tab). That's acceptable for a single-account demo,
-> but for any public deployment, proxy the Swipe and OpenRouter calls through a
-> small backend and keep the keys server-side. The OpenRouter key in particular
-> is a general billable credential — don't ship it to an untrusted audience.
+> The LLM agent's OpenRouter key is **not** set here — it lives on the backend
+> (the `/llm` proxy injects it; see DEPLOYMENT.md). Set `OPENROUTER_API_KEY` in
+> the backend's environment to enable the agent.
+
+> ⚠️ **Security:** `config.js` is served to the browser, so every value in it is
+> readable by anyone who loads the page (view-source / the network tab). Never
+> put a billable credential here — the OpenRouter key is held server-side by the
+> `/llm` proxy for exactly this reason.
 
 > **Seller state:** the live Swipe API has no company endpoint, so the
 > CGST/SGST-vs-IGST split shown on the invoice card is derived from
@@ -119,8 +119,11 @@ absent, the app falls back to the Connection panel / mock mode.
 An injected `window.SWIPE_API_TOKEN` implies live mode with that key. The
 Connection panel writes the localStorage layer, so it can override per session.
 
-The LLM agent reads `window.OPENROUTER_API_KEY` / `window.OPENROUTER_MODEL`
-(or `?llm_key=` / `?llm_model=`). Absent → the regex intent matcher is used.
+The LLM agent is enabled **server-side**: set `OPENROUTER_API_KEY` (and optional
+`OPENROUTER_MODEL`) in the backend's environment. The frontend discovers
+availability via the backend's `/llm/status` and routes planning through its
+`/llm` proxy — the key never reaches the browser. Absent → the regex intent
+matcher is used.
 
 ## Files
 

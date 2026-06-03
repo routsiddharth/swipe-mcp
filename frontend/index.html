@@ -3,6 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="referrer" content="no-referrer" />
+  <!-- Content-Security-Policy: defence-in-depth for the user's Swipe key (held
+       in localStorage). The key protection is `connect-src` — even if an XSS
+       slipped past the HTML sanitizer, the browser will refuse to send the key
+       to any origin not listed here (no exfiltration to attacker.com), and
+       `img-src` blocks beacon exfiltration too.
+       ⚠️ DEPLOY: replace the localhost backend below with YOUR mock-backend
+       origin, and prefer serving this as a real CSP *response header* at your
+       static host (see DEPLOYMENT.md). `unsafe-eval`/`unsafe-inline` are only
+       needed for the in-browser Babel — precompile the JSX in prod to drop them. -->
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self';
+    script-src 'self' https://unpkg.com 'unsafe-inline' 'unsafe-eval';
+    style-src 'self' https://fonts.googleapis.com 'unsafe-inline';
+    font-src https://fonts.gstatic.com;
+    img-src 'self' data:;
+    connect-src 'self' http://127.0.0.1:8000 http://localhost:8000 https://app.getswipe.in;
+    base-uri 'self';
+    form-action 'self';
+    frame-ancestors 'none';
+    object-src 'none';
+  " />
   <title>Swipe · Talk to your billing</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -22,8 +44,9 @@
        fine; the app falls back to the Connection panel / mock mode. -->
   <script src="config.js" onerror="this.remove()"></script>
 
-  <!-- engine (plain JS) -->
+  <!-- engine + tool registry (plain JS) -->
   <script src="engine.js"></script>
+  <script src="tools.js"></script>
 
   <!-- UI (babel) -->
   <script type="text/babel" src="tweaks-panel.jsx"></script>

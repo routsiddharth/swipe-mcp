@@ -1,0 +1,20 @@
+# Keep the backend image lean and secret-free. The Dockerfile only COPYs
+# requirements.txt, mock_backend/ and spec/ — this is belt-and-suspenders so a
+# stray `COPY . .` (or build context upload) never ships secrets or cruft.
+.env
+.env.*
+.venv/
+.git/
+.gitignore
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Frontend is deployed to Vercel, not in this image.
+frontend/
+scripts/
+tests/
+
+# Docs / local notes
+*.md
+CLAUDE.md

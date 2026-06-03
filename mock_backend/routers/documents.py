@@ -1,26 +1,20 @@
-"""Document endpoints (create / list / get / edit / cancel / pdf)."""
+"""Document endpoints (create / list / get / edit / cancel / pdf).
+
+Thin HTTP layer over ``service`` — filtering, the atomic edit-swap and all store
+access live there.
+"""
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Query, Response
 
 from .. import pdf, service
-from ..errors import SwipeError, ok
+from ..errors import ok
 from ..schemas import CreateDocumentIn
 from ..store import db
 
 router = APIRouter(tags=["Document"])
-
-
-def _parse(date_str: Optional[str]) -> Optional[datetime]:
-    if not date_str:
-        return None
-    try:
-        return datetime.strptime(date_str, "%d-%m-%Y")
-    except ValueError:
-        return None
 
 
 @router.post("/v2/doc")
@@ -39,22 +33,14 @@ async def list_documents(
     page: int = 1,
     customer_id: Optional[str] = None,
 ) -> dict:
-    start, end = _parse(start_date), _parse(end_date)
-
-    docs = [d for d in db.documents.values() if d["document_type"] == document_type]
-    if customer_id:
-        docs = [d for d in docs if d["party"]["id"] == customer_id]
-    if payment_status and payment_status != "all":
-        docs = [d for d in docs if d["payment_status"] == payment_status]
-    if start or end:
-        def in_range(d):
-            dt = _parse(d["document_date"])
-            if dt is None:
-                return True
-            return (start is None or dt >= start) and (end is None or dt <= end)
-        docs = [d for d in docs if in_range(d)]
-
-    docs.sort(key=lambda d: _parse(d["document_date"]) or datetime.min)
+    docs = service.query_documents(
+        db,
+        document_type=document_type,
+        payment_status=payment_status,
+        customer_id=customer_id,
+        start_date=start_date,
+        end_date=end_date,
+    )
     total = len(docs)
     page_docs = service.paginate(docs, page, num_records)
     transactions = [service.transaction_view(db, d) for d in page_docs]
@@ -63,9 +49,7 @@ async def list_documents(
 
 @router.get("/v2/doc/pdf/{doc_hash_id}")
 async def get_document_pdf(doc_hash_id: str) -> Response:
-    doc = db.documents.get(doc_hash_id)
-    if not doc:
-        raise SwipeError("INVALID_HASH_ID", f"No document with hash id {doc_hash_id}.", 404)
+    doc = service.get_document(db, doc_hash_id)
     lines = [
         f"Document: {doc['document_type']}  {doc['serial_number']}",
         f"Date: {doc['document_date']}",
@@ -83,38 +67,13 @@ async def get_document_pdf(doc_hash_id: str) -> Response:
 
 @router.get("/v2/doc/{doc_hash_id}")
 async def get_document(doc_hash_id: str) -> dict:
-    doc = db.documents.get(doc_hash_id)
-    if not doc:
-        raise SwipeError("INVALID_HASH_ID", f"No document with hash id {doc_hash_id}.", 404)
+    doc = service.get_document(db, doc_hash_id)
     return ok("Details Fetched", service.document_detail(db, doc))
 
 
 @router.put("/v2/doc/{doc_hash_id}")
 async def edit_document(doc_hash_id: str, payload: CreateDocumentIn) -> dict:
-    old = db.documents.get(doc_hash_id)
-    if not old:
-        raise SwipeError("INVALID_HASH_ID", f"No document with hash id {doc_hash_id}.", 404)
-
-    # Build the replacement FIRST. If it raises (bad tax rate, over-payment,
-    # etc.) the original document is left completely untouched. We let the new
-    # doc auto-assign a serial so it doesn't collide with the still-present
-    # original via the duplicate-serial guard; we restore the original serial
-    # below once the build has succeeded.
-    data = payload.model_dump()
-    data.pop("serial_number", None)
-    new = service.build_document(db, data)
-
-    # Success — atomically swap the original out.
-    for pid in old["payments"]:
-        db.payments.pop(pid, None)
-    del db.documents[doc_hash_id]
-    db.documents.pop(new["hash_id"], None)
-    new["hash_id"] = doc_hash_id
-    new["serial_number"] = old["serial_number"]
-    for pid in new["payments"]:
-        db.payments[pid]["document_hash_id"] = doc_hash_id
-        db.payments[pid]["document_serial_number"] = old["serial_number"]
-    db.documents[doc_hash_id] = new
+    new = service.replace_document(db, doc_hash_id, payload.model_dump())
     return ok("Document updated successfully", service.create_response(new))
 
 

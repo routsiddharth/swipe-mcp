@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from .auth import require_auth
 from .config import settings
 from .errors import SwipeError, error_body, swipe_error_handler
-from .routers import documents, misc, parties, payments, products
+from .routers import documents, llm, misc, parties, payments, products
 from .store import db
 
 logger = logging.getLogger("swipe_mock")
@@ -37,10 +37,23 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=False,
+    allow_credentials=False,  # bearer-token auth only; no cookies → no CSRF surface
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --- Security headers on every response ------------------------------------ #
+# Cheap defence-in-depth. HSTS is intentionally NOT set here — set it at the
+# TLS-terminating proxy/CDN (only valid over HTTPS), per DEPLOYMENT.md.
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+    return resp
 
 # --- Exception handlers: every error uses Swipe's envelope ------------------ #
 app.add_exception_handler(SwipeError, swipe_error_handler)
@@ -76,6 +89,11 @@ app.include_router(documents.router, dependencies=_auth)
 app.include_router(payments.router, dependencies=_auth)
 app.include_router(products.router, dependencies=_auth)
 app.include_router(misc.router, dependencies=_auth)
+
+# The LLM proxy is intentionally UNauthenticated (see routers/llm.py): the
+# browser calls it tokenless, and in live mode must never send the Swipe key to
+# this origin. Rate-limit at the edge for a public deploy.
+app.include_router(llm.router)
 
 
 # --- Unauthenticated helper endpoints (mock-only) -------------------------- #

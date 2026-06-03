@@ -3,6 +3,21 @@
 ============================================================================ */
 const { useState } = React;
 
+/* ---- RichText: the ONLY sanctioned HTML sink --------------------------- */
+// Agent messages and API-sourced strings (customer names, amounts) carry a few
+// inline tags (<b>, <i>, <br>…). They must be escaped before rendering. Routing
+// every such render through this one component means a render site can't forget
+// to sanitize — there is no raw dangerouslySetInnerHTML anywhere else in the UI.
+// E.safeHtml escapes everything, then re-enables only an attribute-less tag
+// whitelist. The seam is here, not in the discipline of each caller.
+function RichText({ text, as = "span", className, style }) {
+  return React.createElement(as, {
+    className,
+    style,
+    dangerouslySetInnerHTML: { __html: window.SwipeEngine.safeHtml(text) },
+  });
+}
+
 /* ---- Logo mark (simple geometric swipe) -------------------------------- */
 function SwipeMark() {
   return (
@@ -37,7 +52,7 @@ function TraceBlock({ msg, onToggle }) {
               <span className="ic">{running ? <span className="spin" /> : <Ic d={ICONS.check} size={12} sw={3} />}</span>
               <span style={{ flex: 1 }}>
                 <span className="tool">{s.tool}</span>{"  "}
-                <span className="lbl" dangerouslySetInnerHTML={{ __html: window.SwipeEngine.safeHtml(s.label) }} />
+                <RichText className="lbl" text={s.label} />
               </span>
             </div>
           );
@@ -80,7 +95,7 @@ function AgentMessage({ msg, onToggleTrace, onConfirm, onCancel }) {
       <div className="avatar"><SwipeMark2 /></div>
       <div className="agent-col">
         {msg.text != null && (
-          <div className="agent-text" dangerouslySetInnerHTML={{ __html: window.SwipeEngine.safeHtml(msg.text) }} />
+          <RichText as="div" className="agent-text" text={msg.text} />
         )}
         {msg.streaming && msg.text === "" && <span className="cursor" />}
         {msg.trace && msg.trace.length > 0 && msg.shownTrace > 0 && (
@@ -93,8 +108,7 @@ function AgentMessage({ msg, onToggleTrace, onConfirm, onCancel }) {
         {msg.committed && msg.committedNote && (
           <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
             <span className="stamp">{msg.stampText || "Done!"}</span>
-            <span style={{ fontWeight: 600, color: "var(--ink-soft)", fontSize: 14 }}
-                  dangerouslySetInnerHTML={{ __html: window.SwipeEngine.safeHtml(msg.committedNote) }} />
+            <RichText style={{ fontWeight: 600, color: "var(--ink-soft)", fontSize: 14 }} text={msg.committedNote} />
           </div>
         )}
         {msg.cancelled && (
