@@ -53,5 +53,15 @@
   <script type="text/babel" src="cards.jsx"></script>
   <script type="text/babel" src="chat.jsx"></script>
   <script type="text/babel" src="app.jsx"></script>
+
+  <!-- Vercel Web Analytics. This is a static site (no Next.js/bundler), so we use
+       the plain-HTML snippet, not @vercel/analytics. Script + beacon are both
+       served from our own origin under /_vercel/insights/*, already covered by
+       the CSP's script-src 'self' / connect-src 'self'. Requires Web Analytics
+       to be enabled for this project in the Vercel dashboard. -->
+  <script>
+    window.va = window.va || function () { (window.vai = window.vai || []).push(arguments); };
+  </script>
+  <script defer src="/_vercel/insights/script.js"></script>
 </body>
 </html>

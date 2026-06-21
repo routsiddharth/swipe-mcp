@@ -27,7 +27,6 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 // local mock to their live Swipe account. Live calls go straight to
 // app.getswipe.in from the browser (it sends permissive CORS) — no proxy.
 function ConnectionModal({ onClose, onApplied }) {
-  const [mode, setMode] = useState(E.mode || "mock");
   // Mock backend URL is fixed (config.js / env via E.backend) — not user-editable.
   const backend = E.backend || "http://127.0.0.1:8000";
   // Pre-fill only from a key the user previously entered+validated on this
@@ -42,84 +41,75 @@ function ConnectionModal({ onClose, onApplied }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  async function apply() {
-    if (mode === "live") {
-      const tok = token.trim();
-      if (!tok) { setStatus({ err: true, msg: "Enter your Swipe API key." }); return; }
-      // Validate with the minimum possible call BEFORE switching to live.
-      setStatus({ busy: true, msg: "Validating key…" });
-      const v = await E.validateLiveKey(tok);
-      if (!v.ok) { setStatus({ err: true, msg: "Error: " + v.error }); return; }
-      // Valid → persist the key (localStorage) and connect live.
-      const ok = await E.configure({ mode: "live", token: tok });
-      markOnboarded();
-      if (ok) {
-        setStatus({ ok: true, msg: "Connected to your live Swipe account." });
-        onApplied();
-        setTimeout(onClose, 900);
-      } else {
-        setStatus({ err: true, msg: "Error: " + (E.lastError || "Key is valid but the account data couldn't be loaded.") });
-      }
+  // Primary path: connect the user's real Swipe account. The modal is key-first
+  // now — live is the headline action, the mock is the quiet escape hatch.
+  async function connectLive() {
+    const tok = token.trim();
+    if (!tok) { setStatus({ err: true, msg: "Enter your Swipe API key." }); return; }
+    // Validate with the minimum possible call BEFORE switching to live.
+    setStatus({ busy: true, msg: "Validating key…" });
+    const v = await E.validateLiveKey(tok);
+    if (!v.ok) { setStatus({ err: true, msg: "Error: " + v.error }); return; }
+    // Valid → persist the key (localStorage) and connect live.
+    const ok = await E.configure({ mode: "live", token: tok });
+    markOnboarded();
+    if (ok) {
+      setStatus({ ok: true, msg: "Connected to your live Swipe account." });
+      onApplied();
+      setTimeout(onClose, 900);
     } else {
-      setStatus({ busy: true, msg: "Connecting…" });
-      const ok = await E.configure({ mode: "mock", backend: backend.trim() });
-      markOnboarded();
-      if (ok) {
-        setStatus({ ok: true, msg: "Connected to the local mock backend." });
-        onApplied();
-        setTimeout(onClose, 700);
-      } else {
-        setStatus({ err: true, msg: E.lastError || "Couldn't reach the mock backend — is it running?" });
-      }
+      setStatus({ err: true, msg: "Error: " + (E.lastError || "Key is valid but the account data couldn't be loaded.") });
     }
   }
 
+  // Secondary path: fall back to the offline mock (replaces the old "Cancel").
+  async function useMock() {
+    setStatus({ busy: true, msg: "Connecting…" });
+    const ok = await E.configure({ mode: "mock", backend: backend.trim() });
+    markOnboarded();
+    if (ok) {
+      setStatus({ ok: true, msg: "Connected to the mock backend." });
+      onApplied();
+      setTimeout(onClose, 700);
+    } else {
+      setStatus({ err: true, msg: E.lastError || "Couldn't reach the mock backend — is it running?" });
+    }
+  }
+
+  const busy = status && status.busy;
+
   return (
     <div className="cfg-overlay" onMouseDown={onClose}>
-      <div className="cfg-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Connection settings">
+      <div className="cfg-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Add Swipe API key">
         <div className="cfg-head">
-          <b>Connection</b>
+          <b>Add Swipe API Key</b>
           <button className="cfg-x" aria-label="Close" onClick={onClose}>✕</button>
         </div>
 
-        <div className="cfg-label">Talk to</div>
-        <div className="cfg-seg" role="radiogroup">
-          {[["mock", "Mock backend"], ["live", "Live Swipe account"]].map(([v, label]) => (
-            <button key={v} type="button" role="radio" aria-checked={mode === v}
-              className={mode === v ? "on" : ""} onClick={() => { setMode(v); setStatus(null); }}>
-              {label}
-            </button>
-          ))}
-        </div>
         <p className="cfg-hint">
-          {mode === "live"
-            ? "Drives your real Swipe account at app.getswipe.in directly. Writes (invoices, payments) are real."
-            : "Hosted FastAPI mock — no key needed, sample data only. Best for the demo."}
+          Paste your key to drive your real Swipe account — create live invoices and
+          payments straight from chat.
         </p>
 
-        {mode === "live" && (
-          <>
-            <div className="cfg-label">Swipe API key</div>
-            <div className="cfg-key">
-              <input className="cfg-field" type={showKey ? "text" : "password"}
-                value={token} placeholder="eyJhbGciOiJI…  (from Swipe → API Integration)"
-                autoComplete="off" spellCheck={false}
-                onChange={(e) => { setToken(e.target.value); setStatus(null); }} />
-              <button type="button" className="btn ghost cfg-eye" onClick={() => setShowKey((s) => !s)}>
-                {showKey ? "Hide" : "Show"}
-              </button>
-            </div>
-          </>
-        )}
+        <div className="cfg-label">Swipe API key</div>
+        <div className="cfg-key">
+          <input className="cfg-field" type={showKey ? "text" : "password"}
+            value={token} placeholder="eyJhbGciOiJI…  (from Swipe → API Integration)"
+            autoComplete="off" spellCheck={false}
+            onChange={(e) => { setToken(e.target.value); setStatus(null); }} />
+          <button type="button" className="btn ghost cfg-eye" onClick={() => setShowKey((s) => !s)}>
+            {showKey ? "Hide" : "Show"}
+          </button>
+        </div>
 
         {status && (status.ok || status.err) && (
           <div className={"cfg-note " + (status.ok ? "ok" : "err")}>{status.msg}</div>
         )}
 
         <div className="cfg-foot">
-          <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" onClick={apply} disabled={status && status.busy}>
-            {status && status.busy ? "Connecting…" : "Save & connect"}
+          <button className="btn ghost cfg-mock" onClick={useMock} disabled={busy}>Use mock backend</button>
+          <button className="btn primary" onClick={connectLive} disabled={busy}>
+            {busy ? "Connecting…" : "Save & connect"}
           </button>
         </div>
       </div>
