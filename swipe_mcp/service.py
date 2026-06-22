@@ -8,11 +8,11 @@ from datetime import date, datetime
 from difflib import SequenceMatcher
 from typing import Any, Awaitable, Callable
 
-from mock_backend.errors import SwipeError as GSTError
+from swipe_core.errors import SwipeError as GSTError
 
 from .client import SwipeAPIError, SwipeClient
 from .config import ConfigurationError, SwipeConfig, normalize_state
-from .mapping import build_invoice, normalize_customer, normalize_product
+from .mapping import build_invoice, build_payment, normalize_customer, normalize_product
 from .models import BankCredit, BankDetails, InvoiceItem, PaymentMethod
 from .reconcile import (
     CONFIDENT,
@@ -227,30 +227,17 @@ class SwipeService:
                     f"Payment {amount:.2f} exceeds outstanding balance {pending:.2f}."
                 )
 
-            if self.config.mode == "live":
-                customer = document.get("customer") or document.get("party") or {}
-                customer_id = customer.get("id") or customer.get("customer_id")
-                if not customer_id:
-                    raise SwipeServiceError("The invoice does not contain a customer ID.")
-                body: dict[str, Any] = {
-                    "amount": amount,
-                    "customer": customer_id,
-                    "payment_date": date.today().strftime("%d-%m-%Y"),
-                    "payment_mode": live_payment_method(method),
-                    "documents": [{"hash_id": document["hash_id"], "amount_paying": amount}],
-                }
-                if bank_details:
-                    body["bank_details"] = bank_details.model_dump()
-                if marker:
-                    body["exclusive_notes"] = marker
-            else:
-                body = {
-                    "doc_hash_id": document["hash_id"],
-                    "amount": amount,
-                    "method": mock_payment_method(method),
-                }
-                if marker:
-                    body["notes"] = marker
+            try:
+                body = build_payment(
+                    document=document,
+                    amount=amount,
+                    method=method,
+                    bank_details=bank_details.model_dump() if bank_details else None,
+                    marker=marker,
+                    live=self.config.mode == "live",
+                )
+            except ValueError as exc:
+                raise SwipeServiceError(str(exc)) from exc
 
             payment = await self.client.record_payment(body)
             verification_error = None
@@ -592,21 +579,6 @@ def reconcile_summary(results: list[dict], *, dry_run: bool) -> dict:
             len(result.get("recorded", [])) for result in results
         )
     return summary
-
-
-def live_payment_method(method: PaymentMethod) -> str:
-    return {
-        "cash": "Cash",
-        "upi": "UPI",
-        "card": "Card",
-        "cheque": "Cheque",
-        "net_banking": "Net Banking",
-        "emi": "EMI",
-    }[method]
-
-
-def mock_payment_method(method: PaymentMethod) -> str:
-    return "netBanking" if method == "net_banking" else method
 
 
 def number(value: Any) -> float | None:

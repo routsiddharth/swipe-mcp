@@ -24,6 +24,11 @@ from pathlib import Path
 
 import httpx
 
+# Make the repo root importable so this script shares the one GST engine
+# (swipe_core.gst) instead of re-deriving the line-item math by hand.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from swipe_core import gst  # noqa: E402
+
 BASE = os.getenv("SWIPE_LIVE_BASE_URL", "https://app.getswipe.in/api/partner").rstrip("/")
 
 
@@ -145,10 +150,6 @@ _PROD = {p[0]: p for p in PRODUCTS}            # id -> tuple
 _CUST = {c[0]: c for c in CUSTOMERS}           # id -> tuple
 
 
-def _money(v: float) -> float:
-    return round(v + 1e-9, 2)
-
-
 def seed_docs(client: httpx.Client) -> None:
     print("Documents:")
     for cid, lines, due_days in DOCS:
@@ -157,18 +158,17 @@ def seed_docs(client: httpx.Client) -> None:
         items = []
         for iid, qty, disc in lines:
             _, pname, sp, tax, cess, itype, unit, hsn = _PROD[iid]
-            rate = tax + cess
-            gross = qty * sp
-            d = gross * disc / 100.0
-            net = gross - d
-            taxamt = net * rate / 100.0
+            calc = gst.compute_line_item(
+                quantity=qty, unit_price=sp, tax_rate=tax, cess_rate=cess,
+                discount_percent=disc or None,
+            )
             items.append({
                 "id": iid, "name": pname, "item_type": itype,
                 "quantity": qty, "unit_price": sp, "tax_rate": tax, "cess_rate": cess,
                 "hsn_code": hsn, "unit": unit, "discount_percent": disc,
-                "net_amount": _money(net), "tax_amount": _money(taxamt),
-                "total_amount": _money(net + taxamt),
-                "price_with_tax": _money(sp * (1 + rate / 100.0)),
+                "net_amount": calc["net_amount"], "tax_amount": calc["tax_amount"],
+                "total_amount": calc["total_amount"],
+                "price_with_tax": calc["price_with_tax"],
             })
         addr = {
             "addr_id_v2": f"d{cid}", "address_line1": f"{name} HQ", "address_line2": "",

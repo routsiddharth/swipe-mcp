@@ -3,6 +3,11 @@
 Every error response follows the spec's shape:
     {"success": false, "error_code": "...", "message": "...", "errors": {}}
 Error codes are drawn from https://developers.getswipe.in/api-reference/error-codes
+
+The ``SwipeError`` class itself lives in the framework-free ``swipe_core.errors``
+so the MCP server can raise/catch the same type without importing this mock. It
+is re-exported here so every existing ``from .errors import SwipeError`` (and the
+FastAPI handler below) keeps the identical class identity.
 """
 from __future__ import annotations
 
@@ -11,20 +16,9 @@ from typing import Optional
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from swipe_core.errors import SwipeError
 
-class SwipeError(Exception):
-    def __init__(
-        self,
-        error_code: str,
-        message: str,
-        status_code: int = 400,
-        errors: Optional[dict] = None,
-    ):
-        self.error_code = error_code
-        self.message = message
-        self.status_code = status_code
-        self.errors = errors or {}
-        super().__init__(message)
+__all__ = ["SwipeError", "error_body", "ok", "swipe_error_handler"]
 
 
 def error_body(error_code: str, message: str, errors: Optional[dict] = None) -> dict:

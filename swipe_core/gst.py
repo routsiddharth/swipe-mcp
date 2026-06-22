@@ -3,6 +3,8 @@
 The real Swipe API computes and validates these amounts server-side. We
 replicate that here so the mock behaves like production and so the calculation
 can be unit-tested in isolation (tests/test_gst.py), without any API access.
+This module is pure: stdlib + ``swipe_core.errors`` only, no I/O, no framework.
+Both ``mock_backend`` and ``swipe_mcp`` depend on it.
 
 Rules verified against the worked examples in spec/partner.yaml:
   discount       = discount_amount, OR (quantity * unit_price) * discount_percent/100

@@ -1,8 +1,8 @@
 """Unit tests for the GST engine, anchored to the spec's worked examples."""
 import pytest
 
-from mock_backend import gst
-from mock_backend.errors import SwipeError
+from swipe_core import gst
+from swipe_core.errors import SwipeError
 
 
 def test_spec_advanced_example():

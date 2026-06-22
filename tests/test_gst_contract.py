@@ -2,7 +2,7 @@
 
 The frontend re-implements the GST math in JS (frontend/engine.js
 ``computeInvoice``) so the invoice preview is instant and offline. That mirror
-could silently drift from the authoritative ``mock_backend/gst.py`` — and a
+could silently drift from the authoritative ``swipe_core/gst.py`` — and a
 drift would only surface as a wrong invoice *after* the user confirms.
 
 This test feeds the SAME fixtures (tests/gst_fixtures.json) to both: the JS side
@@ -16,7 +16,7 @@ import subprocess
 
 import pytest
 
-from mock_backend import gst
+from swipe_core import gst
 
 ROOT = pathlib.Path(__file__).resolve().parent
 FIXTURES = json.loads((ROOT / "gst_fixtures.json").read_text())

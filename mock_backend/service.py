@@ -10,8 +10,9 @@ import copy
 from datetime import datetime
 from typing import Optional
 
-from . import gst, ids
+from . import ids
 from .errors import SwipeError
+from swipe_core import gst
 
 _PAID_EPS = 0.01
 

@@ -6,10 +6,10 @@ import re
 from datetime import date, timedelta
 from typing import Any
 
-from mock_backend.gst import compute_document_totals, compute_line_item
+from swipe_core.gst import compute_document_totals, compute_line_item
 
 from .config import normalize_state
-from .models import InvoiceItem
+from .models import InvoiceItem, PaymentMethod
 
 GST_STATE_CODES = {
     "01": "JAMMU AND KASHMIR", "02": "HIMACHAL PRADESH", "03": "PUNJAB",
@@ -176,6 +176,65 @@ def build_invoice(
         "due_date": body["due_date"],
     }
     return body, preview
+
+
+def build_payment(
+    *,
+    document: dict,
+    amount: float,
+    method: PaymentMethod,
+    bank_details: dict | None = None,
+    marker: str | None = None,
+    live: bool,
+) -> dict:
+    """Build the Swipe wire body for recording a payment against a document.
+
+    Mirrors build_invoice: the live and mock APIs want different shapes, and that
+    request-wire divergence lives here, not in the service. Raises ValueError if
+    a live payment cannot find the customer id (the service maps it to a friendly
+    error, exactly as it does for build_invoice).
+    """
+    if live:
+        customer = document.get("customer") or document.get("party") or {}
+        customer_id = customer.get("id") or customer.get("customer_id")
+        if not customer_id:
+            raise ValueError("The invoice does not contain a customer ID.")
+        body: dict[str, Any] = {
+            "amount": amount,
+            "customer": customer_id,
+            "payment_date": date.today().strftime("%d-%m-%Y"),
+            "payment_mode": live_payment_method(method),
+            "documents": [{"hash_id": document["hash_id"], "amount_paying": amount}],
+        }
+        if bank_details:
+            body["bank_details"] = bank_details
+        if marker:
+            body["exclusive_notes"] = marker
+        return body
+
+    body = {
+        "doc_hash_id": document["hash_id"],
+        "amount": amount,
+        "method": mock_payment_method(method),
+    }
+    if marker:
+        body["notes"] = marker
+    return body
+
+
+def live_payment_method(method: PaymentMethod) -> str:
+    return {
+        "cash": "Cash",
+        "upi": "UPI",
+        "card": "Card",
+        "cheque": "Cheque",
+        "net_banking": "Net Banking",
+        "emi": "EMI",
+    }[method]
+
+
+def mock_payment_method(method: PaymentMethod) -> str:
+    return "netBanking" if method == "net_banking" else method
 
 
 def stable_item_id(name: str, item_type: str) -> str:
