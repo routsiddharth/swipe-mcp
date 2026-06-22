@@ -110,7 +110,7 @@ The mock and live APIs differ and must be adapted explicitly:
 - `tax_rate` (default 18), `cess_rate`, `discount_percent`;
 - optional `item_type`, `item_id`, `unit`, `hsn_code`, `description`.
 
-Every line is computed with `mock_backend.gst.compute_line_item`. The tool also
+Every line is computed with `swipe_core.gst.compute_line_item`. The tool also
 uses `compute_document_totals` and `split_gst` to return the local preview.
 Computed line amounts are sent in both modes so the request contract is the same
 and the live API receives its required fields.

@@ -31,7 +31,7 @@ API calls) lives in the backend.
 - **Illustrative:** the streamed "MCP tool call" trace is a legible visualisation
   of the agent's chosen tool + arguments (the tools call this backend directly
   rather than through a separate MCP process). The pre-confirm GST breakdown is
-  an instant client preview mirroring `mock_backend/gst.py`; the API recomputes
+  an instant client preview mirroring `swipe_core/gst.py`; the API recomputes
   it authoritatively on create.
 
 Nothing is faked: if the backend is unreachable, the app says so (a "Backend

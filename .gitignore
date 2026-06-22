@@ -9,6 +9,9 @@ venv/
 
 # Local project memory for Claude Code — not part of the published artifact
 CLAUDE.md
+DEPLOYMENT.md
+DETAILS.md
+PLAN.md
 
 # Generated at deploy time (scripts/gen_config.mjs / gen_frontend_config.py).
 # Holds only non-secret deploy settings now, but stays generated, not committed.

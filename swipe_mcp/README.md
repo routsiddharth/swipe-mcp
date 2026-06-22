@@ -1,6 +1,6 @@
 # Swipe MCP server
 
-`python -m swipe_mcp` starts a stdio Model Context Protocol server with eight
+`python -m swipe_mcp` starts a stdio Model Context Protocol server with nine
 tools:
 
 | Tool | Behavior |
@@ -10,6 +10,7 @@ tools:
 | `list_products` | Paginated product/service list |
 | `create_invoice` | Existing-customer resolution, GST preview, invoice write |
 | `record_payment` | Exact hash/serial resolution and payment write |
+| `reconcile` | Match bank-statement credits to outstanding invoices; dry-run preview, then idempotent writes |
 | `list_invoices` | Date/status/customer-filtered invoices |
 | `customer_outstanding` | Customer ledger and outstanding balance |
 | `lookup_gstin` | GSTIN format validation and Swipe portal lookup |

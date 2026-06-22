@@ -42,14 +42,14 @@ this machine):
 ```
 
 `PYTHONPATH` lets `python -m swipe_mcp` import both `swipe_mcp` and the shared
-`mock_backend.gst` engine no matter where Claude Desktop launches it. The key is
+`swipe_core.gst` engine no matter where Claude Desktop launches it. The key is
 read from `.env` by absolute path, so it never has to live in this JSON. Restart
 Claude Desktop fully (quit, not just close the window) to pick up the change.
 
 ## Connect to Claude Code
 
 A project-scoped `.mcp.json` at the repo root registers the same server, so
-running `claude` inside this directory exposes the eight Swipe tools.
+running `claude` inside this directory exposes the nine Swipe tools.
 
 ## Local mock
 
