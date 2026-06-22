@@ -71,16 +71,19 @@ top bar (the gear icon) — or set as the deployment default (see below):
 > configured (Settings → company profile). Without it, Swipe zeroes the tax on
 > every invoice regardless of the `tax_rate` sent.
 
-### Always use my key (deployment config)
+### Connection and deployment config
 
-`index.html` loads an optional, git-ignored `config.js` before the engine. Set
-your key there once and the app boots straight into live mode with no UI typing:
+Enter the Swipe API key in the in-app **Connection** panel. The browser validates
+it directly against Swipe and stores it in localStorage on that device. A clean
+browser starts in key-free mock mode.
+
+`index.html` also loads an optional, git-ignored `config.js`, but this file is
+only for non-secret deployment defaults:
 
 ```js
 // frontend/config.js
-window.SWIPE_API_TOKEN = "eyJhbGciOiJI…";   // your Swipe key
-window.SWIPE_MODE = "live";
-window.SWIPE_SELLER_STATE = "TELANGANA";    // your state — for the CGST/SGST vs IGST split
+window.SWIPE_API_BASE = "https://your-mock-backend.example.com";
+window.SWIPE_SELLER_STATE = "TELANGANA";
 ```
 
 > The LLM agent's OpenRouter key is **not** set here — it lives on the backend
@@ -88,36 +91,36 @@ window.SWIPE_SELLER_STATE = "TELANGANA";    // your state — for the CGST/SGST 
 > the backend's environment to enable the agent.
 
 > ⚠️ **Security:** `config.js` is served to the browser, so every value in it is
-> readable by anyone who loads the page (view-source / the network tab). Never
-> put a billable credential here — the OpenRouter key is held server-side by the
-> `/llm` proxy for exactly this reason.
+> readable by anyone who loads the page. Never put the Swipe key, OpenRouter key,
+> or another secret there.
 
 > **Seller state:** the live Swipe API has no company endpoint, so the
 > CGST/SGST-vs-IGST split shown on the invoice card is derived from
 > `SWIPE_SELLER_STATE`. Set it to your business's state; if omitted, the split is
 > flagged "assumed" on the card (the grand total from the API is always correct).
 
-Generate it from an env var (e.g. as your host's build command) so the key lives
-in the hosting platform's environment, not the repo:
+Generate the non-secret settings from environment variables:
 
 ```bash
-SWIPE_API_KEY=...  python scripts/gen_frontend_config.py   # writes frontend/config.js
+SWIPE_API_BASE=https://your-mock.example.com \
+SWIPE_SELLER_STATE=TELANGANA \
+python scripts/gen_frontend_config.py
 ```
 
 `config.js` is `.gitignore`d. See `config.example.js` for the template. If it's
 absent, the app falls back to the Connection panel / mock mode.
 
-### Config precedence (first wins)
+### Config sources
 
-| Source | Mode | Token | Mock base URL |
-|--------|------|-------|---------------|
-| Query param | `?mode=` | `?token=` | `?api=` |
-| `config.js` (env) | `window.SWIPE_MODE` | `window.SWIPE_API_TOKEN` | `window.SWIPE_API_BASE` |
-| localStorage (session) | `swipe_mode` | `swipe_api_token` | `swipe_backend` |
-| Default | `mock` | `demo` | `http://127.0.0.1:8000` |
+| Source | Values |
+|--------|--------|
+| Connection panel / localStorage | live mode and the user's Swipe key |
+| `config.js` | non-secret mock base, seller state/GSTIN, fallback model |
+| `?api=` query parameter | temporary mock base override only |
+| Default | mock mode at `http://127.0.0.1:8000` |
 
-An injected `window.SWIPE_API_TOKEN` implies live mode with that key. The
-Connection panel writes the localStorage layer, so it can override per session.
+Live mode always targets the fixed Swipe production host, so a mock URL override
+cannot receive the real key.
 
 The LLM agent is enabled **server-side**: set `OPENROUTER_API_KEY` (and optional
 `OPENROUTER_MODEL`) in the backend's environment. The frontend discovers

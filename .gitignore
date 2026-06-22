@@ -10,11 +10,12 @@ venv/
 # Local project memory for Claude Code — not part of the published artifact
 CLAUDE.md
 
-# Local deployment notes — not part of the published artifact
-DEPLOYMENT.md
-
 # Generated at deploy time (scripts/gen_config.mjs / gen_frontend_config.py).
 # Holds only non-secret deploy settings now, but stays generated, not committed.
 frontend/config.js
 # Vercel CLI local link/credentials
 .vercel
+
+# Real bank statements dropped at the repo root for ad-hoc reconciliation runs.
+# The committed demo asset is the synthetic one in demo/, not these.
+/*.pdf

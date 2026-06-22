@@ -1,41 +1,71 @@
-# Swipe Partner API — Agent + Mock Backend
+# Swipe MCP Server + Partner API Demo
 
-A conversational agent for [Swipe's](https://getswipe.in) Partner API (v2) that
-runs in **two modes from one codebase**:
+A real stdio MCP server plus a conversational demo for
+[Swipe's](https://getswipe.in) Partner API v2. Claude Desktop, Cursor, and other
+MCP hosts can list customers/products/invoices, inspect ledgers and GSTINs, and
+create invoices or record payments.
 
-- **live** — drives a **real Swipe account** against the production Partner API
-  (`https://app.getswipe.in/api/partner`) with your API key.
-- **mock** — an offline, fully-runnable **FastAPI** mock built entirely against
-  the public OpenAPI spec ([`spec/partner.yaml`](spec/partner.yaml)), so the
-  frontend / MCP server can be developed and demoed **with no Swipe account or
-  key**. Request/response shapes match the spec; the GST math is computed for real.
+- **MCP server** — [`swipe_mcp/`](swipe_mcp/) exposes eight typed tools over
+  stdio, with GST computation, live/mock adapters, error mapping, and retriable
+  write idempotency.
+- **live mode** — calls `https://app.getswipe.in/api/partner` with the API key
+  from the environment or `.env`.
+- **mock mode** — calls the included FastAPI backend with resettable fake data.
+- **browser demo** — [`frontend/`](frontend/) remains an optional in-app agent
+  surface using the same API concepts.
 
-Mock is the zero-setup default; supply a key and flip a single toggle to point
-the same agent and UI at the live API (see [Going live](#going-live-the-real-swipe-api)).
+The MCP live path was verified against a real Swipe account on June 21, 2026:
+customer/product reads, invoice create/get/list, GST totals, cash payment,
+payment retry deduplication, ledger retrieval, GSTIN lookup, and cancellation
+cleanup all reached the production API successfully.
 
-> Status: the mock is built-to-spec; the GST math is verified against the spec's
-> own worked examples (see tests). The conversational frontend can also drive the
-> **real Swipe Partner API directly** (live mode) — the create-invoice, record-
-> payment, list, and ledger flows have been validated against a live account, and
-> the engine adapts to the several places where the live shapes differ from the
-> spec/mock (see `frontend/engine.js`). Live GST requires the Swipe account to
-> have its GSTIN configured, otherwise Swipe zeroes the tax. The free key has a
-> small daily quota; once spent, the app degrades to the mock for reads (see
-> [Graceful degradation](#graceful-degradation-when-the-live-limit-is-hit)).
+## MCP quick start
 
-## Quick start (~30 seconds)
+Install dependencies:
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn mock_backend.main:app --reload
 ```
+
+Run against the local mock:
+
+```bash
+uvicorn mock_backend.main:app --reload
+# in another terminal
+python -m swipe_mcp
+```
+
+Run against the real Swipe API:
+
+```bash
+SWIPE_MODE=live \
+SWIPE_COMPANY_STATE=TELANGANA \
+SWIPE_API_KEY=your-key \
+python -m swipe_mcp
+```
+
+`SWIPE_COMPANY_STATE` must be the seller's registered state; it controls the
+CGST/SGST versus IGST preview. `SWIPE_API_TOKEN` is also accepted. A repository
+`.env` is loaded automatically.
+
+For a low-value production contract test that cancels its test invoice:
+
+```bash
+SWIPE_COMPANY_STATE=TELANGANA python scripts/live_mcp_smoke.py
+```
+
+See [`swipe_mcp/README.md`](swipe_mcp/README.md) for Claude Desktop wiring and
+the tool contracts, and [`DEPLOYMENT.md`](DEPLOYMENT.md) for runtime modes.
+
+## Mock backend quick start
 
 - Interactive docs: http://127.0.0.1:8000/docs
 - Health check (no auth): http://127.0.0.1:8000/health
 
-Every `/v2/...` endpoint requires a bearer token, exactly like production. In
-mock mode **any non-empty token works**:
+Mock authentication is off by default because all data is fake and resettable.
+Set `MOCK_REQUIRE_AUTH=true` to mirror production authentication; unless
+`MOCK_API_TOKEN` is also set, any non-empty bearer token then works:
 
 ```bash
 curl -s http://127.0.0.1:8000/v2/customer/list \
@@ -110,11 +140,13 @@ that one layer for SQLite/Postgres later without touching the routers.
 ## Tests
 
 ```bash
-pytest -q
+python -m pytest -q
 ```
 
 `tests/test_gst.py` pins the GST math to the spec examples; `tests/test_api.py`
-runs end-to-end endpoint flows via FastAPI's TestClient (no network, no key).
+runs end-to-end endpoint flows via FastAPI's TestClient. The MCP tests cover
+live/mock response adaptation, GST request mapping, idempotent create/payment,
+and stdio tool discovery. Normal tests use no live account or network.
 
 ## Conversational frontend
 
@@ -132,12 +164,11 @@ can call it directly (configurable via `MOCK_CORS_ORIGINS`).
 The frontend talks to the **real Partner API directly** in live mode — the Swipe
 API sends permissive CORS headers, so the browser can call `app.getswipe.in`
 without any proxy or backend in the loop. Switch via the in-app **Connection**
-panel, or set a deployment default with a git-ignored `frontend/config.js`
-(generated from an env var) so the hosted app always uses your key:
+panel. The key is validated against Swipe and stored only in that browser's
+localStorage; it is never generated into public deployment files.
 
-```bash
-SWIPE_API_KEY=...  python scripts/gen_frontend_config.py   # writes frontend/config.js
-```
+`frontend/config.js` may contain non-secret defaults such as the mock backend
+URL and seller state, but never the Swipe API key.
 
 Seed a live account with the demo's customers/products (and a few sample
 invoices) so the agent's prompts resolve against real data:
@@ -147,8 +178,7 @@ SWIPE_API_KEY=...  python scripts/seed_live.py          # customers + products
 SWIPE_API_KEY=...  python scripts/seed_live.py --all    # + sample invoices
 ```
 
-See [`frontend/README.md`](frontend/README.md) for the full config precedence.
-The key is read from env / a git-ignored `.env`; it is never committed.
+See [`frontend/README.md`](frontend/README.md) for the connection flow.
 
 ### Graceful degradation when the live limit is hit
 
@@ -171,15 +201,15 @@ limit and re-arms the confirm, so you knowingly re-confirm it against the mock
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `MOCK_REQUIRE_AUTH` | `true` | Enforce the `Authorization: Bearer` header |
+| `MOCK_REQUIRE_AUTH` | `false` | Enforce the `Authorization: Bearer` header |
 | `MOCK_API_TOKEN` | _(empty)_ | If set, only this token is accepted; empty = accept any |
 | `MOCK_HOST` / `MOCK_PORT` | `127.0.0.1` / `8000` | Bind address |
 | `MOCK_CORS_ORIGINS` | `*` | Comma-separated allowed browser origins |
 
 > ⚠️ The mock's defaults are tuned for a zero-setup local demo: CORS is open
-> (`*`) and any non-empty token is accepted. If you deploy the *mock* anywhere
-> public, set `MOCK_CORS_ORIGINS` and `MOCK_API_TOKEN` — otherwise it's
-> world-writable.
+> (`*`) and auth is disabled. If you deploy the *mock* anywhere public, set
+> `MOCK_CORS_ORIGINS`, `MOCK_REQUIRE_AUTH=true`, and `MOCK_API_TOKEN` —
+> otherwise it's world-writable.
 
 ## Layout
 

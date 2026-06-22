@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "swipe": {
+      "command": "/opt/miniconda3/bin/python",
+      "args": ["-m", "swipe_mcp"],
+      "env": {
+        "PYTHONPATH": "/Users/siddharthrout/Desktop/Projects/swipe"
+      }
+    }
+  }
+}

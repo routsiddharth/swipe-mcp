@@ -2,5 +2,7 @@ fastapi>=0.110
 uvicorn[standard]>=0.27
 pydantic>=2.6
 httpx>=0.27          # runtime: used by the /llm OpenRouter proxy (and by tests)
+mcp>=1.28,<2         # stable MCP Python SDK; v2 is currently alpha
+python-dotenv>=1.0   # load local .env for CLI/Claude Desktop development
 # dev / tests
 pytest>=8.0
